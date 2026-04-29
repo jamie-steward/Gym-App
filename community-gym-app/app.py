@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
-import os
 import altair as alt
 import uuid
 from supabase import create_client
@@ -15,15 +14,6 @@ supabase_url = st.secrets["SUPABASE_URL"]
 supabase_key = st.secrets["SUPABASE_KEY"]
 
 supabase = create_client(supabase_url, supabase_key)
-
-# -----------------------------
-# FILE PATHS
-# Logs are still CSV for now.
-# Profiles/accounts now come from Supabase.
-# -----------------------------
-logs_path = "data/logs.csv"
-
-os.makedirs("data", exist_ok=True)
 
 # -----------------------------
 # SIMPLE TARGET CALCULATOR
@@ -75,6 +65,26 @@ def load_profiles():
     return pd.DataFrame(data)
 
 
+def load_logs():
+    response = supabase.table("logs").select("*").execute()
+    data = response.data
+
+    if not data:
+        return pd.DataFrame(columns=[
+            "id", "user_id", "date", "goal", "weight", "calories", "protein", "created_at"
+        ])
+
+    logs_df = pd.DataFrame(data)
+    logs_df["date"] = pd.to_datetime(logs_df["date"], errors="coerce").dt.date
+    logs_df["user_id"] = logs_df["user_id"].astype(str)
+
+    logs_df["weight"] = pd.to_numeric(logs_df["weight"], errors="coerce")
+    logs_df["calories"] = pd.to_numeric(logs_df["calories"], errors="coerce")
+    logs_df["protein"] = pd.to_numeric(logs_df["protein"], errors="coerce")
+
+    return logs_df
+
+
 def update_profile_targets(user_id, calorie_low, calorie_high):
     supabase.table("profiles").update({
         "calorie_low": int(round(calorie_low)),
@@ -95,18 +105,21 @@ def update_full_profile(user_id, goal, age, height_cm, weight_kg, activity_level
     }).eq("user_id", str(user_id)).execute()
 
 
-# -----------------------------
-# LOAD LOGS CSV
-# -----------------------------
-if os.path.exists(logs_path):
-    logs = pd.read_csv(logs_path)
-else:
-    logs = pd.DataFrame(columns=["user_id", "date", "goal", "weight", "calories", "protein"])
-    logs.to_csv(logs_path, index=False)
+def save_log_entry(user_id, entry_date, goal, weight, calories, protein, existing_entry_exists):
+    log_data = {
+        "user_id": str(user_id),
+        "date": entry_date.isoformat(),
+        "goal": goal,
+        "weight": float(weight),
+        "calories": int(calories),
+        "protein": int(protein)
+    }
 
-if not logs.empty:
-    logs["date"] = pd.to_datetime(logs["date"], errors="coerce").dt.date
-    logs["user_id"] = logs["user_id"].astype(str)
+    if existing_entry_exists:
+        supabase.table("logs").update(log_data).eq("user_id", str(user_id)).eq("date", entry_date.isoformat()).execute()
+    else:
+        supabase.table("logs").insert(log_data).execute()
+
 
 # -----------------------------
 # HEADER
@@ -178,6 +191,9 @@ st.write(f"Logged in as: **{user}**")
 CALORIE_LOW = int(profile["calorie_low"])
 CALORIE_HIGH = int(profile["calorie_high"])
 PROTEIN_TARGET = int(profile["protein_target"])
+
+# Load logs from Supabase
+logs = load_logs()
 
 # -----------------------------
 # EDIT PROFILE
@@ -321,26 +337,19 @@ with left:
     protein = st.number_input("Protein (g)", min_value=0, step=5, value=default_protein)
 
     if st.button("Save entry", use_container_width=True):
-        existing_entry = (logs["user_id"] == user_id) & (logs["date"] == entry_date)
+        existing_entry_exists = existing_today.shape[0] > 0
 
-        if existing_entry.any():
-            logs.loc[existing_entry, "goal"] = profile["goal"]
-            logs.loc[existing_entry, "weight"] = weight
-            logs.loc[existing_entry, "calories"] = calories
-            logs.loc[existing_entry, "protein"] = protein
-        else:
-            new_log = pd.DataFrame([{
-                "user_id": user_id,
-                "date": entry_date,
-                "goal": profile["goal"],
-                "weight": weight,
-                "calories": calories,
-                "protein": protein
-            }])
+        save_log_entry(
+            user_id=user_id,
+            entry_date=entry_date,
+            goal=profile["goal"],
+            weight=weight,
+            calories=calories,
+            protein=protein,
+            existing_entry_exists=existing_entry_exists
+        )
 
-            logs = pd.concat([logs, new_log], ignore_index=True)
-
-        logs.to_csv(logs_path, index=False)
+        st.success("Entry saved ✅")
         st.rerun()
 
 with right:

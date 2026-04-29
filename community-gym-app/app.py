@@ -13,6 +13,8 @@ users_path = "data/users.csv"
 logs_path = "data/logs.csv"
 profiles_path = "data/profiles.csv"
 
+os.makedirs("data", exist_ok=True)
+
 # -----------------------------
 # SIMPLE TARGET CALCULATOR
 # -----------------------------

@@ -3,8 +3,20 @@ import pandas as pd
 from datetime import date
 import os
 import altair as alt
+from supabase import create_client
 
 st.set_page_config(page_title="Community Gym App", layout="wide")
+
+supabase_url = st.secrets["SUPABASE_URL"]
+supabase_key = st.secrets["SUPABASE_KEY"]
+
+supabase = create_client(supabase_url, supabase_key)
+
+st.write("Testing Supabase connection...")
+
+test = supabase.table("profiles").select("*").limit(5).execute()
+
+st.write(test.data)
 
 # -----------------------------
 # FILE PATHS

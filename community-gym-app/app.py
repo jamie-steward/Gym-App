@@ -166,14 +166,14 @@ def load_logs(user_id):
     return logs_df
 
 
-def save_log_entry(user_id, entry_date, goal, weight, calories, protein):
+def save_log_entry(user_id, entry_date, goal, weight):
     record = {
         "user_id": str(user_id),
         "date": entry_date.isoformat(),
         "goal": goal,
         "weight": float(weight),
-        "calories": int(calories),
-        "protein": int(protein)
+        "calories": None,
+        "protein": None
     }
 
     supabase.table("logs").upsert(
@@ -350,30 +350,10 @@ today_entry = logs[
 if not today_entry.empty:
     row = today_entry.iloc[0]
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
 
     col1.metric("Weight", f"{row['weight']} kg")
-
-    cal_value = int(row["calories"])
-
-    if CALORIE_LOW <= cal_value <= CALORIE_HIGH:
-        cal_label = f"{cal_value} ✅"
-    elif cal_value < CALORIE_LOW:
-        cal_label = f"{cal_value} ({CALORIE_LOW - cal_value} under)"
-    else:
-        cal_label = f"{cal_value} ({cal_value - CALORIE_HIGH} over)"
-
-    col2.metric("Calories", cal_label)
-
-    protein_value = int(row["protein"])
-
-    if protein_value >= PROTEIN_TARGET:
-        protein_label = f"{protein_value} g ✅"
-    else:
-        protein_label = f"{protein_value} g ({PROTEIN_TARGET - protein_value}g under)"
-
-    col3.metric("Protein", protein_label)
-    col4.metric("Goal", profile["goal"])
+    col2.metric("Goal", profile["goal"])
 
 else:
     st.info("No entry logged for today yet")
@@ -408,12 +388,8 @@ else:
 
 if default_row is not None:
     default_weight = float(default_row["weight"])
-    default_calories = int(default_row["calories"])
-    default_protein = int(default_row["protein"])
 else:
     default_weight = float(profile["weight_kg"])
-    default_calories = CALORIE_LOW
-    default_protein = PROTEIN_TARGET
 
 user_logs = logs[logs["user_id"] == str(user_id)].copy()
 
@@ -429,17 +405,13 @@ with left:
         st.info(prefill_message)
 
     weight = st.number_input("Weight (kg)", min_value=0.0, step=0.1, value=default_weight)
-    calories = st.number_input("Calories", min_value=0, step=50, value=default_calories)
-    protein = st.number_input("Protein (g)", min_value=0, step=5, value=default_protein)
 
     if st.button("Save entry", use_container_width=True):
         save_log_entry(
             user_id=user_id,
             entry_date=entry_date,
             goal=profile["goal"],
-            weight=weight,
-            calories=calories,
-            protein=protein
+            weight=weight
         )
 
         st.success("Entry saved ✅")
@@ -515,120 +487,48 @@ with right:
 
     st.divider()
 
-    st.subheader("Coach feedback")
+    st.subheader("Goal feedback")
 
     if len(user_logs) < 14:
-        st.info("Log at least 14 days of data to get proper adaptive coaching.")
+        st.info("Log at least 14 days of weight data to get trend feedback.")
     else:
-        user_logs["date"] = pd.to_datetime(user_logs["date"])
-        user_logs = user_logs.sort_values("date")
-
         latest_7 = user_logs.tail(7).copy()
         previous_7 = user_logs.iloc[-14:-7].copy()
-
-        latest_7["calories"] = pd.to_numeric(latest_7["calories"], errors="coerce")
-        previous_7["calories"] = pd.to_numeric(previous_7["calories"], errors="coerce")
 
         latest_avg_weight = latest_7["weight"].mean()
         previous_avg_weight = previous_7["weight"].mean()
 
         weight_change = latest_avg_weight - previous_avg_weight
-
-        avg_calories = latest_7["calories"].mean()
-
-        daily_energy_balance = (weight_change * 7700) / 7
-        estimated_maintenance = avg_calories - daily_energy_balance
-
         latest_goal = profile["goal"]
 
         col1, col2, col3 = st.columns(3)
 
         col1.metric("Latest 7-day avg", f"{latest_avg_weight:.2f} kg")
-        col2.metric("Trend", f"{weight_change:+.2f} kg")
-        col3.metric("Estimated maintenance", f"{estimated_maintenance:.0f} kcal")
-
-        st.write(f"Average calories this week: **{avg_calories:.0f} kcal/day**")
+        col2.metric("Previous 7-day avg", f"{previous_avg_weight:.2f} kg")
+        col3.metric("Weekly change", f"{weight_change:+.2f} kg")
 
         if latest_goal == "Cut":
-            suggested_low = estimated_maintenance - 600
-            suggested_high = estimated_maintenance - 400
-
-            st.write(f"Adaptive cut range: **{suggested_low:.0f}–{suggested_high:.0f} kcal**")
-
-            if st.button("Update my profile to this calorie range"):
-                update_profile_targets(user_id, suggested_low, suggested_high)
-                st.success("Profile calorie range updated ✅")
-                st.rerun()
-
-            if weight_change < -0.25:
-                st.success("Cut is moving nicely. Keep your current range.")
-            elif -0.25 <= weight_change <= 0:
-                st.warning("Weight is barely moving. Your app suggests lowering your range slightly.")
+            if -0.75 <= weight_change <= -0.25:
+                st.success("Cut is on track ✅")
+            elif weight_change < -0.75:
+                st.warning("Weight is dropping quickly. Make sure performance and recovery are okay.")
             else:
-                st.error("Weight is rising while cutting. Your range is probably too high.")
+                st.warning("Weight is not dropping much yet. Watch the trend over the next week.")
 
         elif latest_goal == "Lean bulk":
-            suggested_low = estimated_maintenance + 150
-            suggested_high = estimated_maintenance + 300
-
-            st.write(f"Adaptive lean bulk range: **{suggested_low:.0f}–{suggested_high:.0f} kcal**")
-
-            if st.button("Update my profile to this calorie range"):
-                update_profile_targets(user_id, suggested_low, suggested_high)
-                st.success("Profile calorie range updated ✅")
-                st.rerun()
-
-            if 0.15 <= weight_change <= 0.35:
-                st.success("Lean bulk rate looks good. Keep your current range.")
-            elif weight_change < 0.15:
-                st.warning("You are gaining too slowly. Your app suggests increasing calories slightly.")
+            if 0.10 <= weight_change <= 0.35:
+                st.success("Lean bulk is on track ✅")
+            elif weight_change > 0.35:
+                st.warning("Weight is rising quickly. You may be gaining faster than needed.")
             else:
-                st.error("You may be gaining too quickly. Your app suggests reducing calories slightly.")
+                st.warning("Weight is not rising much yet. You may need more food if this continues.")
 
         elif latest_goal == "Recomp":
-            suggested_low = estimated_maintenance - 150
-            suggested_high = estimated_maintenance + 150
-
-            st.write(f"Adaptive recomp range: **{suggested_low:.0f}–{suggested_high:.0f} kcal**")
-
-            if st.button("Update my profile to this calorie range"):
-                update_profile_targets(user_id, suggested_low, suggested_high)
-                st.success("Profile calorie range updated ✅")
-                st.rerun()
-
             if -0.15 <= weight_change <= 0.15:
-                st.success("Weight is stable — ideal for recomp.")
-            elif weight_change < -0.15:
-                st.warning("You may be drifting into a cut.")
+                st.success("Weight is stable — ideal for recomp ✅")
             else:
-                st.warning("You may be drifting into a bulk.")
-
-    st.divider()
-
-    st.subheader("Weekly protein consistency")
-
-    if len(user_logs) >= 7:
-        last_7 = user_logs.tail(7).copy()
-        last_7["protein"] = pd.to_numeric(last_7["protein"], errors="coerce")
-
-        days_hit = (last_7["protein"] >= PROTEIN_TARGET).sum()
-        consistency = (days_hit / 7) * 100
-
-        col1, col2 = st.columns(2)
-
-        col1.metric("Protein target hit", f"{days_hit}/7 days")
-        col2.metric("Consistency", f"{consistency:.0f}%")
-
-        if consistency >= 85:
-            st.success("Excellent consistency — this is elite level adherence.")
-        elif consistency >= 60:
-            st.warning("Decent, but room for improvement. Aim for 6/7 days.")
-        else:
-            st.error("Protein consistency is low — this will limit progress.")
-    else:
-        st.info("Log at least 7 days to see protein consistency.")
-
-st.divider()
+                st.info("Weight is moving. That may be fine, but recomp usually works best with a stable trend.")
+        st.divider()
 
 with st.expander("See raw data"):
     st.write(user_logs)

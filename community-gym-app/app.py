@@ -4,7 +4,7 @@ from datetime import date
 import altair as alt
 from supabase import create_client
 
-DEV_MODE = True
+DEV_MODE = False
 DEV_USER_ID = "3d0682bb-b6c7-4404-b8bb-643e055def38"
 DEV_EMAIL = "jamiesteward10@googlemail.com"
 

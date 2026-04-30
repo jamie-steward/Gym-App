@@ -337,19 +337,21 @@ with left:
     protein = st.number_input("Protein (g)", min_value=0, step=5, value=default_protein)
 
     if st.button("Save entry", use_container_width=True):
-        existing_entry_exists = existing_today.shape[0] > 0
 
-        save_log_entry(
-            user_id=user_id,
-            entry_date=entry_date,
-            goal=profile["goal"],
-            weight=weight,
-            calories=calories,
-            protein=protein,
-            existing_entry_exists=existing_entry_exists
-        )
+        record = {
+            "user_id": user_id,
+            "date": str(entry_date),
+            "goal": profile["goal"],
+            "weight": float(weight) if weight else None,
+            "calories": int(calories) if calories else 0,
+            "protein": int(protein) if protein else 0
+        }
 
-        st.success("Entry saved ✅")
+        supabase.table("logs") \
+            .upsert(record, on_conflict=["user_id", "date"]) \
+            .execute()
+
+        st.success("Saved ✅")
         st.rerun()
 
 with right:
@@ -363,6 +365,7 @@ with right:
         daily_weights = (
             user_logs[["date", "weight"]]
             .dropna()
+            .groupby("date", as_index=False)["weight"].mean()
             .set_index("date")
             .asfreq("D")
         )

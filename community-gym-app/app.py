@@ -58,6 +58,7 @@ def login_user(email, password):
     st.session_state["email"] = response.user.email
     st.session_state["access_token"] = response.session.access_token
     st.session_state["refresh_token"] = response.session.refresh_token
+    st.session_state["last_email"] = response.user.email
 
 
 def signup_user(email, password):

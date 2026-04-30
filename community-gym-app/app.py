@@ -4,6 +4,10 @@ from datetime import date
 import altair as alt
 from supabase import create_client
 
+DEV_MODE = True
+DEV_USER_ID = "your-auth-user-id"
+DEV_EMAIL = "jamiesteward10@googlemail.com"
+
 st.set_page_config(page_title="Community Gym App", layout="wide")
 
 # -----------------------------
@@ -189,6 +193,12 @@ st.divider()
 # -----------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+
+# DEV MODE
+if DEV_MODE and not st.session_state["logged_in"]:
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = DEV_USER_ID
+    st.session_state["email"] = DEV_EMAIL
 
 if not st.session_state["logged_in"]:
     st.subheader("Log in or create account")

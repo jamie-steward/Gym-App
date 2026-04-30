@@ -56,6 +56,8 @@ def login_user(email, password):
     st.session_state["logged_in"] = True
     st.session_state["user_id"] = response.user.id
     st.session_state["email"] = response.user.email
+    st.session_state["access_token"] = response.session.access_token
+    st.session_state["refresh_token"] = response.session.refresh_token
 
 
 def signup_user(email, password):
@@ -67,6 +69,8 @@ def signup_user(email, password):
     st.session_state["logged_in"] = True
     st.session_state["user_id"] = response.user.id
     st.session_state["email"] = response.user.email
+    st.session_state["access_token"] = response.session.access_token
+    st.session_state["refresh_token"] = response.session.refresh_token
 
 
 def logout_user():
@@ -189,6 +193,12 @@ st.divider()
 # -----------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+
+if st.session_state.get("logged_in") and st.session_state.get("access_token"):
+    supabase.auth.set_session(
+        st.session_state["access_token"],
+        st.session_state["refresh_token"]
+    )
 
 
 if not st.session_state["logged_in"]:

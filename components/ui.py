@@ -1,10 +1,20 @@
+import re
+
 import streamlit as st
 
-from components.database import calculate_targets, create_profile, update_full_profile
+from components.database import (
+    calculate_targets,
+    create_profile,
+    is_username_available,
+    update_full_profile,
+    update_public_profile,
+    upload_avatar,
+)
 
 
 GOALS = ["Cut", "Lean bulk", "Recomp"]
 ACTIVITY_LEVELS = ["Sedentary", "Light", "Moderate", "Very active"]
+USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,20}$")
 
 
 def normalize_goal(goal):
@@ -57,6 +67,51 @@ def get_goal_class(goal):
 
 def render_goal_badge(goal):
     return f'<div class="status-pill {get_goal_class(goal)}">{get_goal_label(goal)}</div>'
+
+
+def get_public_display_name(profile, fallback_email=""):
+    if profile and profile.get("display_name"):
+        return profile["display_name"]
+
+    if profile and profile.get("username"):
+        return profile["username"]
+
+    if profile and profile.get("name"):
+        return profile["name"]
+
+    if fallback_email:
+        return fallback_email.split("@")[0]
+
+    return "ShapeUp user"
+
+
+def get_username_label(profile):
+    username = (profile or {}).get("username")
+    return f"@{username}" if username else "No username yet"
+
+
+def get_initials(name):
+    parts = str(name or "S").split()
+    return "".join(part[0] for part in parts[:2]).upper() or "S"
+
+
+def render_avatar_html(name, avatar_url=None, class_name="feed-avatar"):
+    if avatar_url:
+        return f'<div class="{class_name}"><img src="{avatar_url}" alt="{name} avatar"></div>'
+
+    return f'<div class="{class_name}">{get_initials(name)}</div>'
+
+
+def validate_username(username):
+    username = str(username or "").strip().lower()
+
+    if not username:
+        return False, "Choose a username."
+
+    if not USERNAME_PATTERN.match(username):
+        return False, "Use 3-20 lowercase letters, numbers, or underscores."
+
+    return True, ""
 
 
 def add_dashboard_styles():
@@ -174,6 +229,14 @@ def add_dashboard_styles():
             background: linear-gradient(135deg, #f7f8fb, #667085);
             position: relative;
             box-shadow: 0 18px 34px rgba(0, 0, 0, 0.28);
+        }
+
+        .shape-avatar img,
+        .feed-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: inherit;
         }
 
         .shape-avatar::after {
@@ -407,16 +470,26 @@ def add_dashboard_styles():
             font-weight: 900;
         }
 
-        .section-gap {
-            height: 0.45rem;
+        .gap-sm {
+            height: 8px;
         }
 
-        .profile-card-gap {
-            height: 1.15rem;
+        .gap-md {
+            height: 16px;
         }
 
+        .gap-lg {
+            height: 24px;
+        }
+
+        .section-gap,
+        .gap-section {
+            height: 32px;
+        }
+
+        .profile-card-gap,
         .hero-stat-gap {
-            height: 1rem;
+            height: 16px;
         }
 
         .section-label-card {
@@ -706,6 +779,11 @@ def add_dashboard_styles():
             .dashboard-card {
                 border-radius: 24px;
             }
+
+            /* Hide root "app" label in Streamlit sidebar */
+            [data-testid="stSidebarNav"] ul li:first-child {
+                display: none !important;
+            }
         }
         </style>
         """,
@@ -713,12 +791,12 @@ def add_dashboard_styles():
     )
 
 
-def render_app_header(name):
-    initials = "".join(part[0] for part in name.split()[:2]).upper() or "S"
+def render_app_header(name, avatar_url=None):
+    avatar_html = render_avatar_html(name, avatar_url, "shape-avatar")
     st.markdown(
         f"""
         <div class="shape-topbar">
-            <div class="shape-avatar">{initials}</div>
+            {avatar_html}
             <div class="shape-brand">
                 <div class="shape-brand-title">Shape<span>Up</span></div>
                 <p class="shape-brand-subtitle">Stronger together.</p>
@@ -827,6 +905,17 @@ def render_page_heading(title, subtitle=""):
     )
 
 
+def render_spacer(size="md"):
+    classes = {
+        "sm": "gap-sm",
+        "md": "gap-md",
+        "lg": "gap-lg",
+        "section": "gap-section",
+    }
+    spacer_class = classes.get(size, "gap-md")
+    st.markdown(f'<div class="{spacer_class}"></div>', unsafe_allow_html=True)
+
+
 def render_glass_card(title, body, icon="+"):
     st.markdown(
         f"""
@@ -922,6 +1011,9 @@ def render_community_feed():
 
 def render_profile_summary(profile):
     goal = normalize_goal(profile["goal"])
+    display_name = get_public_display_name(profile)
+    username_label = get_username_label(profile)
+    avatar_html = render_avatar_html(display_name, profile.get("avatar_url"), "feed-avatar")
     calorie_low = int(profile["calorie_low"])
     calorie_high = int(profile["calorie_high"])
     protein_target = int(profile["protein_target"])
@@ -947,10 +1039,10 @@ def render_profile_summary(profile):
         <div class="dashboard-card">
             <div class="card-label">Profile</div>
             <div class="feed-head">
-                <div class="feed-avatar">{profile['name'][0]}</div>
+                {avatar_html}
                 <div>
-                    <div class="feed-name">{profile['name']}</div>
-                    <div class="feed-meta">{profile['email']}</div>
+                    <div class="feed-name">{display_name}</div>
+                    <div class="feed-meta">{username_label}</div>
                 </div>
                 {goal_badge}
             </div>
@@ -959,7 +1051,7 @@ def render_profile_summary(profile):
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="profile-card-gap"></div>', unsafe_allow_html=True)
+    render_spacer("md")
 
     col1, col2, col3 = st.columns(3, gap="large")
 
@@ -972,7 +1064,7 @@ def render_profile_summary(profile):
     with col3:
         render_stat_card("Weight", f"{profile['weight_kg']} kg", "Current profile", "W")
 
-    st.markdown('<div class="profile-card-gap"></div>', unsafe_allow_html=True)
+    render_spacer("md")
 
     st.markdown(
         f"""
@@ -1039,7 +1131,56 @@ def show_profile_setup(user_id, email):
 def show_profile_editor(user_id, profile):
     render_profile_summary(profile)
 
-    st.markdown('<div class="profile-card-gap"></div>', unsafe_allow_html=True)
+    render_spacer("md")
+
+    if not profile.get("username"):
+        st.markdown(
+            """
+            <div class="dashboard-card">
+                <div class="card-label">Complete your public profile</div>
+                <p class="subtle-text">Add a username and avatar so friends can find you in Communities.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        render_spacer("md")
+
+    with st.expander("Public profile"):
+        current_username = profile.get("username") or ""
+        current_display_name = profile.get("display_name") or profile.get("name") or ""
+
+        public_username = st.text_input("Username", value=current_username).strip().lower()
+        public_display_name = st.text_input("Display name", value=current_display_name)
+        avatar_file = st.file_uploader("Profile picture", type=["png", "jpg", "jpeg", "webp"])
+
+        if profile.get("avatar_url"):
+            st.image(profile["avatar_url"], width=96)
+
+        if st.button("Update public profile", use_container_width=True):
+            is_valid, error_message = validate_username(public_username)
+
+            if not is_valid:
+                st.error(error_message)
+            elif not is_username_available(user_id, public_username):
+                st.error("That username is already taken.")
+            else:
+                try:
+                    avatar_url = None
+                    if avatar_file is not None:
+                        avatar_url = upload_avatar(user_id, avatar_file)
+
+                    update_public_profile(
+                        user_id=user_id,
+                        username=public_username,
+                        display_name=public_display_name,
+                        avatar_url=avatar_url,
+                    )
+                    st.success("Public profile updated")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Could not update public profile: {e}")
+
+    render_spacer("md")
 
     with st.expander("Edit profile / recalculate targets"):
         edit_goal = st.selectbox(

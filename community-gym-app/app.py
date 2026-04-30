@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import altair as alt
-import uuid
 from supabase import create_client
 
 st.set_page_config(page_title="Community Gym App", layout="wide")
@@ -26,7 +25,6 @@ def calculate_targets(goal, height_cm, weight_kg, age, activity_level):
         "Very active": 1.725,
     }
 
-    # Simple male BMR formula for now
     bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
     maintenance = bmr * activity_multipliers[activity_level]
 
@@ -34,13 +32,11 @@ def calculate_targets(goal, height_cm, weight_kg, age, activity_level):
         calorie_low = maintenance - 600
         calorie_high = maintenance - 400
         protein_target = weight_kg * 2.0
-
     elif goal == "Lean bulk":
         calorie_low = maintenance + 150
         calorie_high = maintenance + 300
         protein_target = weight_kg * 1.8
-
-    else:  # Recomp
+    else:
         calorie_low = maintenance - 150
         calorie_high = maintenance + 150
         protein_target = weight_kg * 2.0
@@ -49,40 +45,75 @@ def calculate_targets(goal, height_cm, weight_kg, age, activity_level):
 
 
 # -----------------------------
-# SUPABASE HELPERS
+# AUTH HELPERS
 # -----------------------------
-def load_profiles():
-    response = supabase.table("profiles").select("*").execute()
-    data = response.data
+def login_user(email, password):
+    response = supabase.auth.sign_in_with_password({
+        "email": email,
+        "password": password
+    })
 
-    if not data:
-        return pd.DataFrame(columns=[
-            "id", "user_id", "email", "name", "goal", "age", "height_cm",
-            "weight_kg", "activity_level", "calorie_low", "calorie_high",
-            "protein_target", "created_at"
-        ])
-
-    return pd.DataFrame(data)
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = response.user.id
+    st.session_state["email"] = response.user.email
 
 
-def load_logs():
-    response = supabase.table("logs").select("*").execute()
-    data = response.data
+def signup_user(email, password):
+    response = supabase.auth.sign_up({
+        "email": email,
+        "password": password
+    })
 
-    if not data:
-        return pd.DataFrame(columns=[
-            "id", "user_id", "date", "goal", "weight", "calories", "protein", "created_at"
-        ])
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = response.user.id
+    st.session_state["email"] = response.user.email
 
-    logs_df = pd.DataFrame(data)
-    logs_df["date"] = pd.to_datetime(logs_df["date"], errors="coerce").dt.date
-    logs_df["user_id"] = logs_df["user_id"].astype(str)
 
-    logs_df["weight"] = pd.to_numeric(logs_df["weight"], errors="coerce")
-    logs_df["calories"] = pd.to_numeric(logs_df["calories"], errors="coerce")
-    logs_df["protein"] = pd.to_numeric(logs_df["protein"], errors="coerce")
+def logout_user():
+    st.session_state["logged_in"] = False
+    st.session_state.pop("user_id", None)
+    st.session_state.pop("email", None)
+    supabase.auth.sign_out()
 
-    return logs_df
+
+# -----------------------------
+# SUPABASE DATA HELPERS
+# -----------------------------
+def load_profile(user_id):
+    response = (
+        supabase.table("profiles")
+        .select("*")
+        .eq("user_id", str(user_id))
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    return response.data[0]
+
+
+def create_profile(user_id, email, name, goal, age, height_cm, weight_kg, activity_level):
+    calorie_low, calorie_high, protein_target = calculate_targets(
+        goal, height_cm, weight_kg, age, activity_level
+    )
+
+    profile = {
+        "user_id": str(user_id),
+        "email": email,
+        "name": name,
+        "goal": goal,
+        "age": int(age),
+        "height_cm": int(height_cm),
+        "weight_kg": float(weight_kg),
+        "activity_level": activity_level,
+        "calorie_low": int(calorie_low),
+        "calorie_high": int(calorie_high),
+        "protein_target": int(protein_target)
+    }
+
+    supabase.table("profiles").insert(profile).execute()
 
 
 def update_profile_targets(user_id, calorie_low, calorie_high):
@@ -105,8 +136,33 @@ def update_full_profile(user_id, goal, age, height_cm, weight_kg, activity_level
     }).eq("user_id", str(user_id)).execute()
 
 
-def save_log_entry(user_id, entry_date, goal, weight, calories, protein, existing_entry_exists):
-    log_data = {
+def load_logs(user_id):
+    response = (
+        supabase.table("logs")
+        .select("*")
+        .eq("user_id", str(user_id))
+        .execute()
+    )
+
+    data = response.data
+
+    if not data:
+        return pd.DataFrame(columns=[
+            "id", "user_id", "date", "goal", "weight", "calories", "protein", "created_at"
+        ])
+
+    logs_df = pd.DataFrame(data)
+    logs_df["date"] = pd.to_datetime(logs_df["date"], errors="coerce").dt.date
+    logs_df["user_id"] = logs_df["user_id"].astype(str)
+    logs_df["weight"] = pd.to_numeric(logs_df["weight"], errors="coerce")
+    logs_df["calories"] = pd.to_numeric(logs_df["calories"], errors="coerce")
+    logs_df["protein"] = pd.to_numeric(logs_df["protein"], errors="coerce")
+
+    return logs_df
+
+
+def save_log_entry(user_id, entry_date, goal, weight, calories, protein):
+    record = {
         "user_id": str(user_id),
         "date": entry_date.isoformat(),
         "goal": goal,
@@ -115,10 +171,10 @@ def save_log_entry(user_id, entry_date, goal, weight, calories, protein, existin
         "protein": int(protein)
     }
 
-    if existing_entry_exists:
-        supabase.table("logs").update(log_data).eq("user_id", str(user_id)).eq("date", entry_date.isoformat()).execute()
-    else:
-        supabase.table("logs").insert(log_data).execute()
+    supabase.table("logs").upsert(
+        record,
+        on_conflict="user_id,date"
+    ).execute()
 
 
 # -----------------------------
@@ -129,71 +185,101 @@ st.caption("Create a profile, track your weight/calories/protein, and get simple
 st.divider()
 
 # -----------------------------
-# CREATE ACCOUNT
+# LOGIN / SIGNUP
 # -----------------------------
-with st.expander("Create new account"):
-    new_name = st.text_input("Name")
-    new_email = st.text_input("Email")
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
 
-    new_goal = st.selectbox("Goal", ["Cut", "Lean bulk", "Recomp"], key="new_goal")
-    new_age = st.number_input("Age", min_value=10, max_value=100, value=32, key="new_age")
-    new_height = st.number_input("Height (cm)", min_value=100, max_value=230, value=183, key="new_height")
-    new_weight = st.number_input("Current weight (kg)", min_value=30.0, max_value=200.0, value=72.0, step=0.1, key="new_weight")
-    new_activity = st.selectbox("Activity level", ["Sedentary", "Light", "Moderate", "Very active"], index=2, key="new_activity")
+if not st.session_state["logged_in"]:
+    st.subheader("Log in or create account")
 
-    if st.button("Create account"):
-        if new_name.strip() == "":
-            st.error("Enter a name first.")
-        elif new_email.strip() == "":
-            st.error("Enter an email first.")
-        else:
-            new_user_id = str(uuid.uuid4())
+    tab_login, tab_signup = st.tabs(["Log in", "Create account"])
 
-            calorie_low, calorie_high, protein_target = calculate_targets(
-                new_goal, new_height, new_weight, new_age, new_activity
-            )
+    with tab_login:
+        login_email = st.text_input("Email", key="login_email")
+        login_password = st.text_input("Password", type="password", key="login_password")
 
-            new_profile = {
-                "user_id": new_user_id,
-                "email": new_email,
-                "name": new_name,
-                "goal": new_goal,
-                "age": int(new_age),
-                "height_cm": int(new_height),
-                "weight_kg": float(new_weight),
-                "activity_level": new_activity,
-                "calorie_low": int(calorie_low),
-                "calorie_high": int(calorie_high),
-                "protein_target": int(protein_target)
-            }
+        if st.button("Log in", use_container_width=True):
+            try:
+                login_user(login_email, login_password)
+                st.success("Logged in ✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Login failed: {e}")
 
-            supabase.table("profiles").insert(new_profile).execute()
+    with tab_signup:
+        signup_email = st.text_input("Email", key="signup_email")
+        signup_password = st.text_input("Password", type="password", key="signup_password")
 
-            st.success("Account created ✅")
-            st.rerun()
+        st.info("After creating your login, you'll complete your fitness profile.")
 
-# -----------------------------
-# PICK USER
-# -----------------------------
-profiles = load_profiles()
+        if st.button("Create login", use_container_width=True):
+            try:
+                signup_user(signup_email, signup_password)
+                st.success("Login created ✅")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Signup failed: {e}")
 
-if profiles.empty:
-    st.warning("Create an account first.")
     st.stop()
 
-user = st.selectbox("Sign in as", profiles["name"])
+user_id = st.session_state["user_id"]
+email = st.session_state["email"]
 
-profile = profiles[profiles["name"] == user].iloc[0]
-user_id = str(profile["user_id"])
+top_left, top_right = st.columns([3, 1])
 
-st.write(f"Logged in as: **{user}**")
+with top_left:
+    st.write(f"Logged in as: **{email}**")
+
+with top_right:
+    if st.button("Log out", use_container_width=True):
+        logout_user()
+        st.rerun()
+
+# -----------------------------
+# PROFILE SETUP
+# -----------------------------
+profile = load_profile(user_id)
+
+if profile is None:
+    st.subheader("Complete your profile")
+
+    profile_name = st.text_input("Name")
+    profile_goal = st.selectbox("Goal", ["Cut", "Lean bulk", "Recomp"])
+    profile_age = st.number_input("Age", min_value=10, max_value=100, value=32)
+    profile_height = st.number_input("Height (cm)", min_value=100, max_value=230, value=183)
+    profile_weight = st.number_input("Current weight (kg)", min_value=30.0, max_value=200.0, value=72.0, step=0.1)
+    profile_activity = st.selectbox("Activity level", ["Sedentary", "Light", "Moderate", "Very active"], index=2)
+
+    if st.button("Save profile", use_container_width=True):
+        if profile_name.strip() == "":
+            st.error("Enter your name first.")
+        else:
+            create_profile(
+                user_id=user_id,
+                email=email,
+                name=profile_name,
+                goal=profile_goal,
+                age=profile_age,
+                height_cm=profile_height,
+                weight_kg=profile_weight,
+                activity_level=profile_activity
+            )
+
+            st.success("Profile saved ✅")
+            st.rerun()
+
+    st.stop()
+
+user_name = profile["name"]
+
+st.write(f"Profile: **{user_name}**")
 
 CALORIE_LOW = int(profile["calorie_low"])
 CALORIE_HIGH = int(profile["calorie_high"])
 PROTEIN_TARGET = int(profile["protein_target"])
 
-# Load logs from Supabase
-logs = load_logs()
+logs = load_logs(user_id)
 
 # -----------------------------
 # EDIT PROFILE
@@ -245,7 +331,7 @@ st.subheader("Today's status")
 today = date.today()
 
 today_entry = logs[
-    (logs["user_id"] == user_id) &
+    (logs["user_id"] == str(user_id)) &
     (logs["date"] == today)
 ]
 
@@ -290,7 +376,7 @@ st.info(f"Your current targets: **{CALORIE_LOW}–{CALORIE_HIGH} kcal** and **{P
 entry_date = st.date_input("Date", date.today())
 
 user_previous_logs = logs[
-    (logs["user_id"] == user_id) &
+    (logs["user_id"] == str(user_id)) &
     (logs["date"] <= entry_date)
 ].sort_values("date")
 
@@ -301,11 +387,9 @@ existing_today = user_previous_logs[user_previous_logs["date"] == entry_date]
 if not existing_today.empty:
     default_row = existing_today.iloc[-1]
     prefill_message = "Existing entry found for this date — fields pre-filled ✅"
-
 elif not user_previous_weight_logs.empty:
     default_row = user_previous_weight_logs.iloc[-1]
     prefill_message = "No entry for this date yet — using your most recent previous entry as a starting point ✅"
-
 else:
     default_row = None
     prefill_message = ""
@@ -319,7 +403,7 @@ else:
     default_calories = CALORIE_LOW
     default_protein = PROTEIN_TARGET
 
-user_logs = logs[logs["user_id"] == user_id].copy()
+user_logs = logs[logs["user_id"] == str(user_id)].copy()
 
 # -----------------------------
 # SPLIT SCREEN
@@ -337,21 +421,16 @@ with left:
     protein = st.number_input("Protein (g)", min_value=0, step=5, value=default_protein)
 
     if st.button("Save entry", use_container_width=True):
+        save_log_entry(
+            user_id=user_id,
+            entry_date=entry_date,
+            goal=profile["goal"],
+            weight=weight,
+            calories=calories,
+            protein=protein
+        )
 
-        record = {
-            "user_id": user_id,
-            "date": str(entry_date),
-            "goal": profile["goal"],
-            "weight": float(weight) if weight else None,
-            "calories": int(calories) if calories else 0,
-            "protein": int(protein) if protein else 0
-        }
-
-        supabase.table("logs") \
-            .upsert(record, on_conflict=["user_id", "date"]) \
-            .execute()
-
-        st.success("Saved ✅")
+        st.success("Entry saved ✅")
         st.rerun()
 
 with right:
@@ -361,7 +440,6 @@ with right:
         user_logs["date"] = pd.to_datetime(user_logs["date"])
         user_logs = user_logs.sort_values("date")
 
-        # Create daily date range and fill gaps
         daily_weights = (
             user_logs[["date", "weight"]]
             .dropna()
@@ -370,16 +448,18 @@ with right:
             .asfreq("D")
         )
 
-        # Straight-line fill missing weights between real weigh-ins
         daily_weights["weight_interpolated"] = daily_weights["weight"].interpolate(method="time")
 
-        # Add goal to daily data
-        goal_map = user_logs.set_index("date")["goal"]
+        goal_map = (
+            user_logs[["date", "goal"]]
+            .dropna()
+            .drop_duplicates(subset=["date"], keep="last")
+            .set_index("date")["goal"]
+        )
 
         daily_weights["goal"] = goal_map
         daily_weights["goal"] = daily_weights["goal"].ffill()
 
-        # Smooth the interpolated trend
         daily_weights["weight_14_day_avg"] = (
             daily_weights["weight_interpolated"]
             .rolling(window=14, min_periods=3)
@@ -444,8 +524,6 @@ with right:
 
         avg_calories = latest_7["calories"].mean()
 
-        # Estimate real maintenance from weight trend
-        # 1kg bodyweight change roughly = 7700 calories
         daily_energy_balance = (weight_change * 7700) / 7
         estimated_maintenance = avg_calories - daily_energy_balance
 

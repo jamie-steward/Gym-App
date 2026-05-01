@@ -1238,7 +1238,7 @@ def show_profile_setup(user_id, email):
             st.rerun()
 
 
-def show_profile_editor(user_id, profile, followers_count=0, following_count=0, current_weight=None):
+def show_profile_editor(user_id, profile, followers_count=0, following_count=0, current_weight=None, *_, **__):
     render_profile_summary(profile, followers_count, following_count, current_weight)
 
     render_spacer("md")

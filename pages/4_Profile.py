@@ -37,4 +37,10 @@ if not logs.empty:
     if not user_logs.empty:
         current_weight = float(user_logs.iloc[-1]["weight"])
 
-show_profile_editor(user_id, profile, followers_count, following_count, current_weight)
+show_profile_editor(
+    user_id=user_id,
+    profile=profile,
+    followers_count=followers_count,
+    following_count=following_count,
+    current_weight=current_weight,
+)

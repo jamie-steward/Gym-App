@@ -256,8 +256,11 @@ def update_full_profile(
     calorie_low,
     calorie_high,
     protein_target,
+    use_custom_targets=False,
+    custom_calorie_target=None,
+    custom_protein_target=None,
 ):
-    supabase.table("profiles").update({
+    record = {
         "goal": goal,
         "age": int(age),
         "height_cm": int(height_cm),
@@ -266,7 +269,20 @@ def update_full_profile(
         "calorie_low": int(calorie_low),
         "calorie_high": int(calorie_high),
         "protein_target": int(protein_target),
-    }).eq("user_id", str(user_id)).execute()
+        "use_custom_targets": bool(use_custom_targets),
+        "custom_calorie_target": int(custom_calorie_target) if use_custom_targets and custom_calorie_target else None,
+        "custom_protein_target": int(custom_protein_target) if use_custom_targets and custom_protein_target else None,
+    }
+
+    try:
+        supabase.table("profiles").update(record).eq("user_id", str(user_id)).execute()
+    except Exception:
+        # Existing Supabase projects may not have custom target columns yet.
+        # Keep calculated target updates working until the migration is applied.
+        record.pop("use_custom_targets", None)
+        record.pop("custom_calorie_target", None)
+        record.pop("custom_protein_target", None)
+        supabase.table("profiles").update(record).eq("user_id", str(user_id)).execute()
 
 
 def load_logs(user_id):

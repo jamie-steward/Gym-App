@@ -449,6 +449,27 @@ def add_dashboard_styles():
             padding-bottom: 1.35rem;
         }
 
+        .profile-stat-card {
+            height: 220px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 1.35rem;
+            border-radius: 24px;
+            border: 1px solid var(--shape-line);
+            overflow: hidden;
+        }
+
+        .profile-start-weight {
+            color: rgba(255, 255, 255, 0.6);
+            margin-top: 0.28rem;
+        }
+
+        .profile-targets-expander {
+            margin-top: 20px;
+        }
+
         .stat-value {
             color: var(--shape-text);
             font-size: clamp(1.55rem, 5vw, 2.3rem);
@@ -780,6 +801,18 @@ def add_dashboard_styles():
             border: 1px solid var(--shape-line);
             border-radius: 24px;
             background: rgba(255, 255, 255, 0.035);
+            box-shadow: none !important;
+            outline: none !important;
+            overflow: hidden;
+        }
+
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] summary,
+        div[data-testid="stExpander"] summary:focus,
+        div[data-testid="stExpander"] summary:focus-visible {
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
         }
 
         @media (max-width: 720px) {
@@ -851,14 +884,15 @@ def render_weight_card(name, current_weight, weekly_value, status_text, status_k
     )
 
 
-def render_stat_card(label, value, detail="", icon="+"):
+def render_stat_card(label, value, detail="", icon="+", extra_class=""):
+    detail_html = f'<p class="subtle-text">{detail}</p>' if detail else ""
     st.markdown(
         f"""
-        <div class="dashboard-card stat-card">
+        <div class="dashboard-card stat-card {extra_class}">
             <div class="stat-icon">{icon}</div>
             <div class="card-label">{label}</div>
             <p class="stat-value">{value}</p>
-            <p class="subtle-text">{detail}</p>
+            {detail_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -1027,7 +1061,7 @@ def render_community_feed():
         )
 
 
-def render_profile_summary(profile, followers_count=0, following_count=0):
+def render_profile_summary(profile, followers_count=0, following_count=0, current_weight=None):
     goal = normalize_goal(profile["goal"])
     display_name = get_public_display_name(profile)
     username_label = get_username_label(profile)
@@ -1035,6 +1069,19 @@ def render_profile_summary(profile, followers_count=0, following_count=0):
     calorie_low = int(profile["calorie_low"])
     calorie_high = int(profile["calorie_high"])
     protein_target = int(profile["protein_target"])
+    use_custom_targets = bool(profile.get("use_custom_targets"))
+    custom_calorie_target = profile.get("custom_calorie_target")
+    custom_protein_target = profile.get("custom_protein_target")
+    display_calorie_target = f"{calorie_low}&ndash;{calorie_high} kcal"
+    display_protein_target = f"{protein_target}g"
+    custom_note = ""
+
+    if use_custom_targets:
+        if custom_calorie_target:
+            display_calorie_target = f"{int(custom_calorie_target)} kcal"
+        if custom_protein_target:
+            display_protein_target = f"{int(custom_protein_target)}g"
+        custom_note = '<p class="subtle-text" style="margin-top: 0.75rem;">Custom targets are enabled.</p>'
 
     if goal == "cut":
         target_label = "Cutting targets"
@@ -1051,6 +1098,16 @@ def render_profile_summary(profile, followers_count=0, following_count=0):
 
     target_context_color = get_goal_color(goal)
     goal_badge = render_goal_badge(goal)
+    starting_weight = profile.get("starting_weight_kg") or profile.get("weight_kg")
+    current_weight = float(current_weight if current_weight is not None else profile.get("weight_kg", 0))
+    started_line = ""
+    change_line = ""
+
+    if starting_weight:
+        weight_change = current_weight - float(starting_weight)
+        change_arrow = "↓" if weight_change < 0 else "↑" if weight_change > 0 else ""
+        started_line = f'<p class="subtle-text profile-start-weight">Started at {float(starting_weight):.1f} kg</p>'
+        change_line = f'<p class="subtle-text" style="margin-top: 0.12rem; color: {target_context_color}; font-weight: 850;">{weight_change:+.1f} kg {change_arrow}</p>'
 
     st.markdown(
         f"""
@@ -1077,13 +1134,24 @@ def render_profile_summary(profile, followers_count=0, following_count=0):
     col1, col2, col3 = st.columns(3, gap="large")
 
     with col1:
-        render_stat_card("Age", profile["age"], "Profile age", "#")
+        render_stat_card("Age", profile["age"], "", "#", "profile-stat-card")
 
     with col2:
-        render_stat_card("Height", f"{profile['height_cm']} cm", "Current profile", "H")
+        render_stat_card("Height", f"{profile['height_cm']} cm", "", "H", "profile-stat-card")
 
     with col3:
-        render_stat_card("Weight", f"{profile['weight_kg']} kg", "Current profile", "W")
+        st.markdown(
+            f"""
+            <div class="dashboard-card stat-card profile-stat-card">
+                <div class="stat-icon">W</div>
+                <div class="card-label">Weight</div>
+                <p class="stat-value">{current_weight:.1f} kg</p>
+                {started_line}
+                {change_line}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     render_spacer("md")
 
@@ -1101,17 +1169,27 @@ def render_profile_summary(profile, followers_count=0, following_count=0):
                 </div>
                 <div class="target-cell">
                     <div class="target-label">Daily Calorie Target</div>
-                    <p class="target-value">{calorie_low}&ndash;{calorie_high} kcal</p>
+                    <p class="target-value">{display_calorie_target}</p>
                 </div>
                 <div class="target-cell">
                     <div class="target-label">Daily Protein Target</div>
-                    <p class="target-value">{protein_target}g</p>
+                    <p class="target-value">{display_protein_target}</p>
                 </div>
             </div>
+            {custom_note}
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    st.markdown('<div class="profile-targets-expander">', unsafe_allow_html=True)
+    with st.expander("How targets are calculated"):
+        st.write("Maintenance is estimated from age, height, weight, and activity level.")
+        st.write("Cut applies roughly a 400-600 kcal deficit.")
+        st.write("Lean bulk applies roughly a 200-300 kcal surplus.")
+        st.write("Recomp keeps calories around maintenance.")
+        st.write("Protein is estimated from bodyweight, roughly around 2g/kg.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def show_profile_setup(user_id, email):
@@ -1160,8 +1238,8 @@ def show_profile_setup(user_id, email):
             st.rerun()
 
 
-def show_profile_editor(user_id, profile, followers_count=0, following_count=0):
-    render_profile_summary(profile, followers_count, following_count)
+def show_profile_editor(user_id, profile, followers_count=0, following_count=0, current_weight=None):
+    render_profile_summary(profile, followers_count, following_count, current_weight)
 
     render_spacer("md")
 
@@ -1248,6 +1326,32 @@ def show_profile_editor(user_id, profile, followers_count=0, following_count=0):
         st.write(f"Calculated calorie range: **{new_low}-{new_high} kcal**")
         st.write(f"Calculated protein target: **{new_protein}g**")
 
+        use_custom_targets = st.checkbox(
+            "Use custom targets",
+            value=bool(profile.get("use_custom_targets")),
+            help="Advanced: override the calculated calorie and protein targets.",
+        )
+        custom_calorie_target = None
+        custom_protein_target = None
+
+        if use_custom_targets:
+            default_calories = int(profile.get("custom_calorie_target") or round((new_low + new_high) / 2))
+            default_protein = int(profile.get("custom_protein_target") or new_protein)
+            custom_calorie_target = st.number_input(
+                "Custom daily calorie target",
+                min_value=800,
+                max_value=6000,
+                value=default_calories,
+                step=25,
+            )
+            custom_protein_target = st.number_input(
+                "Custom daily protein target",
+                min_value=40,
+                max_value=400,
+                value=default_protein,
+                step=5,
+            )
+
         if st.button("Update profile"):
             update_full_profile(
                 user_id=user_id,
@@ -1259,6 +1363,9 @@ def show_profile_editor(user_id, profile, followers_count=0, following_count=0):
                 calorie_low=new_low,
                 calorie_high=new_high,
                 protein_target=new_protein,
+                use_custom_targets=use_custom_targets,
+                custom_calorie_target=custom_calorie_target,
+                custom_protein_target=custom_protein_target,
             )
 
             st.success("Profile updated")

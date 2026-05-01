@@ -1,7 +1,7 @@
 import streamlit as st
 
 from components.auth import require_login, show_logout_button
-from components.database import count_followers, count_following, load_profile
+from components.database import count_followers, count_following, load_logs, load_profile
 from components.ui import (
     add_dashboard_styles,
     get_public_display_name,
@@ -30,4 +30,11 @@ if profile is None:
 render_app_header(get_public_display_name(profile, email), profile.get("avatar_url"))
 render_page_heading("Profile", "View your details and update your targets.")
 render_spacer("md")
-show_profile_editor(user_id, profile, followers_count, following_count)
+logs = load_logs(user_id)
+current_weight = None
+if not logs.empty:
+    user_logs = logs[logs["user_id"] == str(user_id)].copy().sort_values("date")
+    if not user_logs.empty:
+        current_weight = float(user_logs.iloc[-1]["weight"])
+
+show_profile_editor(user_id, profile, followers_count, following_count, current_weight)

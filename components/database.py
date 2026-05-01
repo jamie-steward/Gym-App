@@ -286,7 +286,7 @@ def save_log_entry(user_id, entry_date, goal, weight):
     ).execute()
 
 
-def create_workout(user_id, workout_type, started_at, subtype=None):
+def create_workout(user_id, workout_type, started_at, subtype=None, planned_exercises=None, workout_name=None):
     record = {
         "user_id": str(user_id),
         "workout_type": workout_type,
@@ -294,7 +294,21 @@ def create_workout(user_id, workout_type, started_at, subtype=None):
         "started_at": started_at.isoformat(),
     }
 
-    response = supabase.table("workouts").insert(record).execute()
+    if planned_exercises is not None:
+        record["planned_exercises"] = planned_exercises
+
+    if workout_name:
+        record["workout_name"] = workout_name
+
+    try:
+        response = supabase.table("workouts").insert(record).execute()
+    except Exception:
+        # Older Supabase projects may not have planned_exercises/workout_name yet.
+        # The app can still start workouts, but plan restore needs the SQL migration.
+        record.pop("planned_exercises", None)
+        record.pop("workout_name", None)
+        response = supabase.table("workouts").insert(record).execute()
+
     return response.data[0]
 
 
@@ -313,6 +327,25 @@ def load_active_workout(user_id):
         return None
 
     return response.data[0]
+
+
+def update_workout_plan(user_id, workout_id, planned_exercises):
+    record = {
+        "planned_exercises": planned_exercises or [],
+    }
+
+    try:
+        response = (
+            supabase.table("workouts")
+            .update(record)
+            .eq("id", workout_id)
+            .eq("user_id", str(user_id))
+            .execute()
+        )
+    except Exception:
+        return None
+
+    return response.data[0] if response.data else None
 
 
 def finish_workout(

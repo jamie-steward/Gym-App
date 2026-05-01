@@ -15,6 +15,7 @@ from components.database import (
     save_workout_preset,
     save_workout_set,
     summarize_workout,
+    update_workout_plan,
     update_workout_preset,
 )
 from components.ui import (
@@ -117,18 +118,45 @@ def get_active_workout():
 def restore_active_workout(user_id):
     active_workout = get_active_workout()
     if active_workout:
+        if active_workout.get("planned_exercises"):
+            st.session_state["preset_exercises"] = clean_exercise_list(active_workout["planned_exercises"])
+            return active_workout
+
+        workout = load_active_workout(user_id)
+        if not workout:
+            return active_workout
+
+        planned_exercises = workout_planned_exercises(workout)
+        if planned_exercises:
+            active_workout["planned_exercises"] = planned_exercises
+            st.session_state["preset_exercises"] = planned_exercises
+        if workout.get("workout_name"):
+            active_workout["preset_name"] = workout["workout_name"]
         return active_workout
 
     workout = load_active_workout(user_id)
     if not workout:
         return None
 
+    planned_exercises = workout_planned_exercises(workout)
+    if not planned_exercises:
+        workout_sets = load_workout_sets(user_id, workout["id"])
+        planned_exercises = clean_exercise_list([
+            row["exercise_name"]
+            for row in workout_sets
+            if row.get("exercise_name")
+        ])
+
     st.session_state["active_workout"] = {
         "id": workout["id"],
         "workout_type": workout["workout_type"],
         "subtype": workout.get("subtype"),
         "started_at": workout["started_at"],
+        "planned_exercises": planned_exercises,
     }
+    if workout.get("workout_name"):
+        st.session_state["active_workout"]["preset_name"] = workout["workout_name"]
+    st.session_state["preset_exercises"] = planned_exercises
 
     return st.session_state["active_workout"]
 
@@ -150,6 +178,15 @@ def clean_exercise_list(exercises):
             cleaned.append(exercise_name)
 
     return cleaned
+
+
+def workout_planned_exercises(workout):
+    planned = workout.get("planned_exercises") or []
+
+    if isinstance(planned, list):
+        return clean_exercise_list(planned)
+
+    return []
 
 
 def exercise_text_to_list(exercise_text):
@@ -233,16 +270,20 @@ def start_workout_from_template(user_id, preset_name, preset_data):
         workout_type=preset_data["workout_type"],
         started_at=started_at,
         subtype=preset_data.get("subtype"),
+        planned_exercises=clean_exercise_list(preset_data.get("exercises", [])),
+        workout_name=preset_name,
     )
 
+    planned_exercises = clean_exercise_list(preset_data.get("exercises", []))
     st.session_state["active_workout"] = {
         "id": workout["id"],
         "workout_type": preset_data["workout_type"],
         "subtype": preset_data.get("subtype"),
         "started_at": started_at.isoformat(),
         "preset_name": preset_name,
+        "planned_exercises": planned_exercises,
     }
-    st.session_state["preset_exercises"] = preset_data.get("exercises", [])
+    st.session_state["preset_exercises"] = planned_exercises
 
 
 def format_exercise_preview(exercises, max_items=4):
@@ -581,7 +622,9 @@ def show_start_workout(user_id):
         st.session_state.pop("cardio_duration_minutes", None)
         st.session_state.pop("cardio_estimated_calories", None)
         preset_exercises = selected_data.get("exercises", []) if selected_data else []
+        preset_exercises = clean_exercise_list(preset_exercises)
         st.session_state["preset_exercises"] = preset_exercises
+        workout_name = selected_preset["name"] if selected_preset else None
 
         try:
             workout = create_workout(
@@ -589,12 +632,15 @@ def show_start_workout(user_id):
                 workout_type=workout_type,
                 started_at=started_at,
                 subtype=subtype,
+                planned_exercises=preset_exercises,
+                workout_name=workout_name,
             )
             st.session_state["active_workout"] = {
                 "id": workout["id"],
                 "workout_type": workout_type,
                 "subtype": subtype,
                 "started_at": started_at.isoformat(),
+                "planned_exercises": preset_exercises,
             }
             if selected_preset:
                 st.session_state["active_workout"]["preset_name"] = selected_preset["name"]
@@ -605,16 +651,25 @@ def show_start_workout(user_id):
 
 def show_weight_training(user_id, active_workout):
     workout_sets = load_workout_sets(user_id, active_workout["id"])
-    active_exercises = st.session_state.setdefault("preset_exercises", [])
+    saved_plan = clean_exercise_list(active_workout.get("planned_exercises", []))
+    session_plan = clean_exercise_list(st.session_state.get("preset_exercises") or [])
+    active_exercises = session_plan or saved_plan
+    st.session_state["preset_exercises"] = active_exercises
     logged_exercises = [row["exercise_name"] for row in workout_sets if row.get("exercise_name")]
+    plan_changed = False
 
     for exercise_name in logged_exercises:
         if exercise_name not in active_exercises:
             active_exercises.append(exercise_name)
+            plan_changed = True
+
+    if plan_changed:
+        active_workout["planned_exercises"] = clean_exercise_list(active_exercises)
+        update_workout_plan(user_id, active_workout["id"], active_workout["planned_exercises"])
 
     show_workout_plan(user_id, active_workout, workout_sets)
     render_spacer("lg")
-    show_add_exercise(active_workout["id"])
+    show_add_exercise(user_id, active_workout)
     render_spacer("lg")
 
     st.markdown(
@@ -719,7 +774,8 @@ def show_workout_plan(user_id, active_workout, workout_sets):
             show_log_set_fields(user_id, active_workout, exercise_name)
 
 
-def show_add_exercise(workout_id):
+def show_add_exercise(user_id, active_workout):
+    workout_id = active_workout["id"]
     st.markdown(
         '<div class="card-label" style="margin: 0 0 8px 0;">Add exercise</div>',
         unsafe_allow_html=True,
@@ -749,7 +805,11 @@ def show_add_exercise(workout_id):
         elif exercise_name in active_exercises:
             st.info("That exercise is already in this workout.")
         else:
-            st.session_state["preset_exercises"].append(exercise_name)
+            active_exercises.append(exercise_name)
+            active_exercises = clean_exercise_list(active_exercises)
+            st.session_state["preset_exercises"] = active_exercises
+            active_workout["planned_exercises"] = active_exercises
+            update_workout_plan(user_id, workout_id, active_exercises)
             st.session_state["workout_message"] = f"{exercise_name} added"
             st.rerun()
 
@@ -764,7 +824,10 @@ def show_add_exercise(workout_id):
         )
 
         if st.button("Update exercise list", use_container_width=True, type="primary"):
-            st.session_state["preset_exercises"] = exercise_text_to_list(exercise_text)
+            active_exercises = exercise_text_to_list(exercise_text)
+            st.session_state["preset_exercises"] = active_exercises
+            active_workout["planned_exercises"] = active_exercises
+            update_workout_plan(user_id, workout_id, active_exercises)
             st.session_state["workout_message"] = "Exercise list updated"
             st.rerun()
 

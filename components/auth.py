@@ -1,6 +1,98 @@
 import streamlit as st
+import streamlit.components.v1 as components
+import json
 
 from components.database import supabase
+
+
+AUTH_STORAGE_KEY = "shapeup_auth_session"
+AUTH_QUERY_PARAM = "shapeup_session"
+
+
+def _session_payload():
+    if not st.session_state.get("access_token") or not st.session_state.get("refresh_token"):
+        return None
+
+    return {
+        "logged_in": True,
+        "user_id": st.session_state.get("user_id"),
+        "email": st.session_state.get("email"),
+        "access_token": st.session_state.get("access_token"),
+        "refresh_token": st.session_state.get("refresh_token"),
+    }
+
+
+def persist_session_to_browser(reload_page=False):
+    payload = _session_payload()
+    if not payload:
+        return
+
+    reload_js = "window.parent.location.reload();" if reload_page else ""
+    payload_json = json.dumps(payload)
+    components.html(
+        f"""
+        <script>
+        localStorage.setItem("{AUTH_STORAGE_KEY}", JSON.stringify({payload_json}));
+        {reload_js}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def request_browser_session_restore():
+    # Streamlit does not expose browser localStorage directly to Python.
+    # This tiny bridge restores the Supabase session after mobile refresh/sleep
+    # by passing the saved browser session back once, then clearing the URL.
+    components.html(
+        f"""
+        <script>
+        const key = "{AUTH_STORAGE_KEY}";
+        const param = "{AUTH_QUERY_PARAM}";
+        const saved = localStorage.getItem(key);
+        const url = new URL(window.parent.location.href);
+        if (saved && !url.searchParams.has(param)) {{
+            url.searchParams.set(param, btoa(saved));
+            window.parent.location.replace(url.toString());
+        }}
+        </script>
+        """,
+        height=0,
+    )
+
+
+def clear_browser_session():
+    components.html(
+        f"""
+        <script>
+        localStorage.removeItem("{AUTH_STORAGE_KEY}");
+        </script>
+        """,
+        height=0,
+    )
+
+
+def apply_session(session_data):
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = session_data["user_id"]
+    st.session_state["email"] = session_data["email"]
+    st.session_state["access_token"] = session_data["access_token"]
+    st.session_state["refresh_token"] = session_data["refresh_token"]
+    st.session_state["last_email"] = session_data["email"]
+    supabase.auth.set_session(session_data["access_token"], session_data["refresh_token"])
+
+
+def store_auth_session(user, session):
+    if user is None or session is None:
+        raise ValueError("Supabase did not return a complete login session.")
+
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = user.id
+    st.session_state["email"] = user.email
+    st.session_state["access_token"] = session.access_token
+    st.session_state["refresh_token"] = session.refresh_token
+    st.session_state["last_email"] = user.email
+    st.session_state.pop("manual_logout", None)
 
 
 def restore_session():
@@ -8,10 +100,30 @@ def restore_session():
         st.session_state["logged_in"] = False
 
     if st.session_state.get("logged_in") and st.session_state.get("access_token"):
-        supabase.auth.set_session(
-            st.session_state["access_token"],
-            st.session_state["refresh_token"],
-        )
+        try:
+            supabase.auth.set_session(
+                st.session_state["access_token"],
+                st.session_state["refresh_token"],
+            )
+            return
+        except Exception:
+            st.session_state["logged_in"] = False
+
+    restored_payload = st.query_params.get(AUTH_QUERY_PARAM)
+    if restored_payload and not st.session_state.get("manual_logout"):
+        try:
+            import base64
+
+            session_data = json.loads(base64.b64decode(restored_payload).decode("utf-8"))
+            apply_session(session_data)
+            st.query_params.clear()
+            st.rerun()
+        except Exception:
+            clear_browser_session()
+            st.query_params.clear()
+
+    if not st.session_state.get("logged_in") and not st.session_state.get("manual_logout"):
+        request_browser_session_restore()
 
 
 def login_user(email, password):
@@ -20,12 +132,7 @@ def login_user(email, password):
         "password": password,
     })
 
-    st.session_state["logged_in"] = True
-    st.session_state["user_id"] = response.user.id
-    st.session_state["email"] = response.user.email
-    st.session_state["access_token"] = response.session.access_token
-    st.session_state["refresh_token"] = response.session.refresh_token
-    st.session_state["last_email"] = response.user.email
+    store_auth_session(response.user, response.session)
 
 
 def signup_user(email, password):
@@ -34,14 +141,11 @@ def signup_user(email, password):
         "password": password,
     })
 
-    st.session_state["logged_in"] = True
-    st.session_state["user_id"] = response.user.id
-    st.session_state["email"] = response.user.email
-    st.session_state["access_token"] = response.session.access_token
-    st.session_state["refresh_token"] = response.session.refresh_token
+    store_auth_session(response.user, response.session)
 
 
 def logout_user():
+    st.session_state["manual_logout"] = True
     st.session_state["logged_in"] = False
     st.session_state.pop("user_id", None)
     st.session_state.pop("email", None)
@@ -51,6 +155,9 @@ def logout_user():
 
 
 def show_login_form():
+    if st.session_state.get("manual_logout"):
+        clear_browser_session()
+
     st.markdown(
         """
         <div class="shape-brand" style="margin: 2rem 0 1.5rem 0;">
@@ -65,7 +172,7 @@ def show_login_form():
     tab_login, tab_signup = st.tabs(["Log in", "Create account"])
 
     with tab_login:
-        login_email = st.text_input("Email", key="login_email")
+        login_email = st.text_input("Email", value=st.session_state.get("last_email", ""), key="login_email")
         login_password = st.text_input("Password", type="password", key="login_password")
 
         if st.button("Log in", use_container_width=True):
@@ -98,6 +205,7 @@ def require_login():
         show_login_form()
         st.stop()
 
+    persist_session_to_browser()
     return st.session_state["user_id"], st.session_state["email"]
 
 

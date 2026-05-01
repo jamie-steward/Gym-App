@@ -8,6 +8,7 @@ from components.database import (
     create_workout,
     delete_workout_set,
     finish_workout,
+    load_active_workout,
     load_profile,
     load_workout_presets,
     load_workout_sets,
@@ -111,6 +112,25 @@ LOAD_MODE_DISPLAY = {
 
 def get_active_workout():
     return st.session_state.get("active_workout")
+
+
+def restore_active_workout(user_id):
+    active_workout = get_active_workout()
+    if active_workout:
+        return active_workout
+
+    workout = load_active_workout(user_id)
+    if not workout:
+        return None
+
+    st.session_state["active_workout"] = {
+        "id": workout["id"],
+        "workout_type": workout["workout_type"],
+        "subtype": workout.get("subtype"),
+        "started_at": workout["started_at"],
+    }
+
+    return st.session_state["active_workout"]
 
 
 def clear_active_workout():
@@ -875,7 +895,7 @@ profile = load_profile(user_id)
 render_app_header(get_public_display_name(profile, email), profile.get("avatar_url") if profile else None)
 render_page_heading("Log Workout", "Log strength sessions and simple cardio.")
 
-active_workout = get_active_workout()
+active_workout = restore_active_workout(user_id)
 
 if st.session_state.get("workout_message"):
     st.success(st.session_state.pop("workout_message"))

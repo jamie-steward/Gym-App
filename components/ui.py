@@ -780,10 +780,6 @@ def add_dashboard_styles():
                 border-radius: 24px;
             }
 
-            /* Hide root "app" label in Streamlit sidebar */
-            [data-testid="stSidebarNav"] ul li:first-child {
-                display: none !important;
-            }
         }
         </style>
         """,

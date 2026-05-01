@@ -298,6 +298,23 @@ def create_workout(user_id, workout_type, started_at, subtype=None):
     return response.data[0]
 
 
+def load_active_workout(user_id):
+    response = (
+        supabase.table("workouts")
+        .select("*")
+        .eq("user_id", str(user_id))
+        .filter("ended_at", "is", "null")
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not response.data:
+        return None
+
+    return response.data[0]
+
+
 def finish_workout(
     user_id,
     workout_id,

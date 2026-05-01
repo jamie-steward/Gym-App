@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from html import escape
+import json
 
 import streamlit as st
 
@@ -115,37 +116,43 @@ def get_active_workout():
     return st.session_state.get("active_workout")
 
 
+def workout_plan_key(workout_id):
+    return f"planned_exercises_{workout_id}"
+
+
+def remember_workout_plan(workout_id, exercises):
+    plan = clean_exercise_list(exercises)
+    st.session_state[workout_plan_key(workout_id)] = plan
+    st.session_state["preset_exercises"] = plan
+    return plan
+
+
+def remembered_workout_plan(workout_id):
+    return clean_exercise_list(st.session_state.get(workout_plan_key(workout_id)) or [])
+
+
 def restore_active_workout(user_id):
     active_workout = get_active_workout()
-    if active_workout:
-        if active_workout.get("planned_exercises"):
-            st.session_state["preset_exercises"] = clean_exercise_list(active_workout["planned_exercises"])
-            return active_workout
+    workout = load_active_workout(user_id)
 
-        workout = load_active_workout(user_id)
-        if not workout:
-            return active_workout
-
-        planned_exercises = workout_planned_exercises(workout)
-        if planned_exercises:
-            active_workout["planned_exercises"] = planned_exercises
-            st.session_state["preset_exercises"] = planned_exercises
-        if workout.get("workout_name"):
-            active_workout["preset_name"] = workout["workout_name"]
+    if not workout:
         return active_workout
 
-    workout = load_active_workout(user_id)
-    if not workout:
-        return None
+    workout_sets = load_workout_sets(user_id, workout["id"])
+    planned_exercises = restored_workout_plan(workout, workout_sets)
+    session_plan = clean_exercise_list((active_workout or {}).get("planned_exercises", []))
+    cached_plan = remembered_workout_plan(workout["id"])
+    session_name = (active_workout or {}).get("preset_name")
 
-    planned_exercises = workout_planned_exercises(workout)
-    if not planned_exercises:
-        workout_sets = load_workout_sets(user_id, workout["id"])
-        planned_exercises = clean_exercise_list([
-            row["exercise_name"]
-            for row in workout_sets
-            if row.get("exercise_name")
-        ])
+    if not workout_planned_exercises(workout):
+        # Immediately after starting/logging, Supabase may briefly return an
+        # active row without planned_exercises. Do not collapse the full plan
+        # down to logged sets; use the same-workout cached plan first.
+        fallback_plan = cached_plan or session_plan
+        if fallback_plan:
+            planned_exercises = build_visible_exercises(fallback_plan, workout_sets)
+        if planned_exercises:
+            update_workout_plan(user_id, workout["id"], planned_exercises)
 
     st.session_state["active_workout"] = {
         "id": workout["id"],
@@ -156,12 +163,17 @@ def restore_active_workout(user_id):
     }
     if workout.get("workout_name"):
         st.session_state["active_workout"]["preset_name"] = workout["workout_name"]
-    st.session_state["preset_exercises"] = planned_exercises
+    elif session_name and active_workout and active_workout.get("id") == workout["id"]:
+        st.session_state["active_workout"]["preset_name"] = session_name
+    remember_workout_plan(workout["id"], planned_exercises)
 
     return st.session_state["active_workout"]
 
 
 def clear_active_workout():
+    active_workout = get_active_workout()
+    if active_workout:
+        st.session_state.pop(workout_plan_key(active_workout["id"]), None)
     st.session_state.pop("active_workout", None)
     st.session_state.pop("cardio_distance_km", None)
     st.session_state.pop("cardio_duration_minutes", None)
@@ -186,7 +198,39 @@ def workout_planned_exercises(workout):
     if isinstance(planned, list):
         return clean_exercise_list(planned)
 
+    if isinstance(planned, str):
+        try:
+            return clean_exercise_list(json.loads(planned))
+        except Exception:
+            return []
+
     return []
+
+
+def workout_set_exercises(workout_sets):
+    return clean_exercise_list([
+        row["exercise_name"]
+        for row in workout_sets
+        if row.get("exercise_name")
+    ])
+
+
+def restored_workout_plan(workout, workout_sets):
+    # Supabase is the source of truth after refresh/logout.
+    # Keep the saved preset/manual plan first, then append any logged exercises
+    # that are missing so older or partially migrated workouts do not break.
+    plan = workout_planned_exercises(workout)
+    return build_visible_exercises(plan, workout_sets)
+
+
+def build_visible_exercises(planned_exercises, workout_sets):
+    plan = clean_exercise_list(planned_exercises)
+
+    for exercise_name in workout_set_exercises(workout_sets):
+        if exercise_name not in plan:
+            plan.append(exercise_name)
+
+    return plan
 
 
 def exercise_text_to_list(exercise_text):
@@ -203,6 +247,12 @@ def option_index(options, value):
 
 def normalize_preset_data(preset):
     data = preset.get("preset_data") or {}
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = {}
+
     exercises = data.get("exercises") or []
     workout_type = data.get("workout_type", "Weight training")
     subtype = data.get("subtype") or "Mixed"
@@ -283,7 +333,7 @@ def start_workout_from_template(user_id, preset_name, preset_data):
         "preset_name": preset_name,
         "planned_exercises": planned_exercises,
     }
-    st.session_state["preset_exercises"] = planned_exercises
+    remember_workout_plan(workout["id"], planned_exercises)
 
 
 def format_exercise_preview(exercises, max_items=4):
@@ -380,8 +430,12 @@ def save_set_for_exercise(user_id, active_workout, exercise_name, weight, reps, 
         load_mode=load_mode,
     )
 
-    if exercise_name not in st.session_state["preset_exercises"]:
-        st.session_state["preset_exercises"].append(exercise_name)
+    current_plan = remembered_workout_plan(active_workout["id"]) or workout_planned_exercises(active_workout)
+    if exercise_name not in current_plan:
+        current_plan.append(exercise_name)
+        current_plan = remember_workout_plan(active_workout["id"], current_plan)
+        active_workout["planned_exercises"] = current_plan
+        update_workout_plan(user_id, active_workout["id"], current_plan)
 
     if is_pr:
         st.session_state["workout_message"] = f"New PR for {exercise_name}! 🎉"
@@ -623,7 +677,6 @@ def show_start_workout(user_id):
         st.session_state.pop("cardio_estimated_calories", None)
         preset_exercises = selected_data.get("exercises", []) if selected_data else []
         preset_exercises = clean_exercise_list(preset_exercises)
-        st.session_state["preset_exercises"] = preset_exercises
         workout_name = selected_preset["name"] if selected_preset else None
 
         try:
@@ -635,6 +688,9 @@ def show_start_workout(user_id):
                 planned_exercises=preset_exercises,
                 workout_name=workout_name,
             )
+            if preset_exercises:
+                update_workout_plan(user_id, workout["id"], preset_exercises)
+
             st.session_state["active_workout"] = {
                 "id": workout["id"],
                 "workout_type": workout_type,
@@ -644,6 +700,8 @@ def show_start_workout(user_id):
             }
             if selected_preset:
                 st.session_state["active_workout"]["preset_name"] = selected_preset["name"]
+            remember_workout_plan(workout["id"], preset_exercises)
+            restore_active_workout(user_id)
             st.rerun()
         except Exception as e:
             st.error(f"Could not start workout. If tables are not created yet, run the SQL below. Error: {e}")
@@ -651,20 +709,13 @@ def show_start_workout(user_id):
 
 def show_weight_training(user_id, active_workout):
     workout_sets = load_workout_sets(user_id, active_workout["id"])
-    saved_plan = clean_exercise_list(active_workout.get("planned_exercises", []))
-    session_plan = clean_exercise_list(st.session_state.get("preset_exercises") or [])
-    active_exercises = session_plan or saved_plan
-    st.session_state["preset_exercises"] = active_exercises
-    logged_exercises = [row["exercise_name"] for row in workout_sets if row.get("exercise_name")]
-    plan_changed = False
+    saved_plan = workout_planned_exercises(active_workout)
+    cached_plan = remembered_workout_plan(active_workout["id"])
+    active_exercises = build_visible_exercises(saved_plan or cached_plan, workout_sets)
+    remember_workout_plan(active_workout["id"], active_exercises)
 
-    for exercise_name in logged_exercises:
-        if exercise_name not in active_exercises:
-            active_exercises.append(exercise_name)
-            plan_changed = True
-
-    if plan_changed:
-        active_workout["planned_exercises"] = clean_exercise_list(active_exercises)
+    if saved_plan and active_exercises != saved_plan:
+        active_workout["planned_exercises"] = active_exercises
         update_workout_plan(user_id, active_workout["id"], active_workout["planned_exercises"])
 
     show_workout_plan(user_id, active_workout, workout_sets)
@@ -679,7 +730,7 @@ def show_weight_training(user_id, active_workout):
     preset_name = st.text_input("Preset name", value=f"{active_workout.get('subtype') or 'Workout'} preset")
 
     if st.button("Save as preset", use_container_width=True, type="primary"):
-        exercise_names = st.session_state.get("preset_exercises") or logged_exercises
+        exercise_names = st.session_state.get("preset_exercises") or workout_set_exercises(workout_sets)
         preset_data = {
             "workout_type": active_workout["workout_type"],
             "subtype": active_workout.get("subtype"),
@@ -697,7 +748,7 @@ def show_weight_training(user_id, active_workout):
 
 def show_workout_plan(user_id, active_workout, workout_sets):
     render_section_card_start("Workout Plan")
-    active_exercises = st.session_state.get("preset_exercises", [])
+    active_exercises = remembered_workout_plan(active_workout["id"])
 
     if not active_exercises:
         st.caption("Add exercises as you train, or start from a preset.")
@@ -780,7 +831,7 @@ def show_add_exercise(user_id, active_workout):
         '<div class="card-label" style="margin: 0 0 8px 0;">Add exercise</div>',
         unsafe_allow_html=True,
     )
-    active_exercises = st.session_state.get("preset_exercises", [])
+    active_exercises = remembered_workout_plan(workout_id)
     exercise_options = [
         exercise_name for exercise_name in EXERCISES
         if exercise_name not in active_exercises
@@ -807,7 +858,7 @@ def show_add_exercise(user_id, active_workout):
         else:
             active_exercises.append(exercise_name)
             active_exercises = clean_exercise_list(active_exercises)
-            st.session_state["preset_exercises"] = active_exercises
+            remember_workout_plan(workout_id, active_exercises)
             active_workout["planned_exercises"] = active_exercises
             update_workout_plan(user_id, workout_id, active_exercises)
             st.session_state["workout_message"] = f"{exercise_name} added"
@@ -825,7 +876,7 @@ def show_add_exercise(user_id, active_workout):
 
         if st.button("Update exercise list", use_container_width=True, type="primary"):
             active_exercises = exercise_text_to_list(exercise_text)
-            st.session_state["preset_exercises"] = active_exercises
+            remember_workout_plan(workout_id, active_exercises)
             active_workout["planned_exercises"] = active_exercises
             update_workout_plan(user_id, workout_id, active_exercises)
             st.session_state["workout_message"] = "Exercise list updated"

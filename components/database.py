@@ -100,14 +100,16 @@ def normalize_username(username):
 
 def is_username_available(user_id, username):
     username = normalize_username(username)
-    response = (
+    query = (
         supabase.table("profiles")
         .select("user_id")
         .eq("username", username)
-        .neq("user_id", str(user_id))
-        .limit(1)
-        .execute()
     )
+
+    if user_id:
+        query = query.neq("user_id", str(user_id))
+
+    response = query.limit(1).execute()
 
     return not response.data
 
@@ -215,6 +217,28 @@ def unfollow_user(user_id, following_id):
     return response.data or []
 
 
+def count_followers(user_id):
+    response = (
+        supabase.table("follows")
+        .select("follower_id")
+        .eq("following_id", str(user_id))
+        .execute()
+    )
+
+    return len(response.data or [])
+
+
+def count_following(user_id):
+    response = (
+        supabase.table("follows")
+        .select("following_id")
+        .eq("follower_id", str(user_id))
+        .execute()
+    )
+
+    return len(response.data or [])
+
+
 def update_profile_targets(user_id, calorie_low, calorie_high):
     supabase.table("profiles").update({
         "calorie_low": int(round(calorie_low)),
@@ -303,11 +327,16 @@ def create_workout(user_id, workout_type, started_at, subtype=None, planned_exer
     try:
         response = supabase.table("workouts").insert(record).execute()
     except Exception:
-        # Older Supabase projects may not have planned_exercises/workout_name yet.
-        # The app can still start workouts, but plan restore needs the SQL migration.
-        record.pop("planned_exercises", None)
+        # workout_name is optional. If that column has not been migrated yet,
+        # retry without it so planned_exercises can still be saved.
         record.pop("workout_name", None)
-        response = supabase.table("workouts").insert(record).execute()
+        try:
+            response = supabase.table("workouts").insert(record).execute()
+        except Exception:
+            # Older Supabase projects may not have planned_exercises yet.
+            # The app can still start workouts, but plan restore needs the SQL migration.
+            record.pop("planned_exercises", None)
+            response = supabase.table("workouts").insert(record).execute()
 
     return response.data[0]
 

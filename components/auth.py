@@ -1,12 +1,33 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import json
+import re
 
-from components.database import supabase
+from components.database import is_username_available, normalize_username, supabase
 
 
 AUTH_STORAGE_KEY = "shapeup_auth_session"
 AUTH_QUERY_PARAM = "shapeup_session"
+USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,20}$")
+
+
+def validate_signup_public_profile(display_name, username):
+    display_name = str(display_name or "").strip()
+    username = normalize_username(username)
+
+    if not display_name:
+        return None, None, "Enter a display name."
+
+    if not username:
+        return None, None, "Choose a username."
+
+    if not USERNAME_PATTERN.match(username):
+        return None, None, "Use 3-20 lowercase letters, numbers, or underscores for your username."
+
+    if not is_username_available(None, username):
+        return None, None, "That username is already taken."
+
+    return display_name, username, ""
 
 
 def _session_payload():
@@ -32,7 +53,12 @@ def persist_session_to_browser(reload_page=False):
     components.html(
         f"""
         <script>
-        localStorage.setItem("{AUTH_STORAGE_KEY}", JSON.stringify({payload_json}));
+        const payload = JSON.stringify({payload_json});
+        try {{
+            window.parent.localStorage.setItem("{AUTH_STORAGE_KEY}", payload);
+        }} catch (error) {{
+            localStorage.setItem("{AUTH_STORAGE_KEY}", payload);
+        }}
         {reload_js}
         </script>
         """,
@@ -49,7 +75,12 @@ def request_browser_session_restore():
         <script>
         const key = "{AUTH_STORAGE_KEY}";
         const param = "{AUTH_QUERY_PARAM}";
-        const saved = localStorage.getItem(key);
+        let saved = null;
+        try {{
+            saved = window.parent.localStorage.getItem(key);
+        }} catch (error) {{
+            saved = localStorage.getItem(key);
+        }}
         const url = new URL(window.parent.location.href);
         if (saved && !url.searchParams.has(param)) {{
             url.searchParams.set(param, btoa(saved));
@@ -65,7 +96,11 @@ def clear_browser_session():
     components.html(
         f"""
         <script>
-        localStorage.removeItem("{AUTH_STORAGE_KEY}");
+        try {{
+            window.parent.localStorage.removeItem("{AUTH_STORAGE_KEY}");
+        }} catch (error) {{
+            localStorage.removeItem("{AUTH_STORAGE_KEY}");
+        }}
         </script>
         """,
         height=0,
@@ -135,13 +170,30 @@ def login_user(email, password):
     store_auth_session(response.user, response.session)
 
 
-def signup_user(email, password):
+def signup_user(email, password, display_name, username):
+    display_name, username, validation_error = validate_signup_public_profile(display_name, username)
+    if validation_error:
+        raise ValueError(validation_error)
+
     response = supabase.auth.sign_up({
         "email": email,
         "password": password,
     })
 
+    st.session_state["pending_public_profile"] = {
+        "display_name": display_name,
+        "username": username,
+    }
+
+    if response.user is not None and response.session is None:
+        # With email verification enabled there is no authenticated Supabase
+        # session yet, so RLS may block profile writes. Keep the signup friendly
+        # and let the normal profile setup apply this after confirmed login.
+        st.session_state["last_email"] = response.user.email or email
+        return "email_confirmation_required"
+
     store_auth_session(response.user, response.session)
+    return "logged_in"
 
 
 def logout_user():
@@ -186,14 +238,29 @@ def show_login_form():
     with tab_signup:
         signup_email = st.text_input("Email", key="signup_email")
         signup_password = st.text_input("Password", type="password", key="signup_password")
+        signup_display_name = st.text_input("Display name", key="signup_display_name")
+        signup_username = st.text_input(
+            "Username",
+            key="signup_username",
+            help="Use 3-20 lowercase letters, numbers, or underscores.",
+        ).strip().lower()
 
         st.info("After creating your login, you'll complete your fitness profile.")
 
         if st.button("Create login", use_container_width=True):
             try:
-                signup_user(signup_email, signup_password)
-                st.success("Login created")
-                st.rerun()
+                signup_result = signup_user(
+                    signup_email,
+                    signup_password,
+                    signup_display_name,
+                    signup_username,
+                )
+                if signup_result == "email_confirmation_required":
+                    st.success("Account created. Check your email to confirm your login, then come back and sign in.")
+                    st.info("Your username will be applied when you complete your profile after your first confirmed login.")
+                else:
+                    st.success("Login created")
+                    st.rerun()
             except Exception as e:
                 st.error(f"Signup failed: {e}")
 

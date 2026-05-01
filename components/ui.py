@@ -749,9 +749,31 @@ def add_dashboard_styles():
             border: 1px solid rgba(102, 240, 95, 0.45);
             background: linear-gradient(135deg, var(--shape-green), #8dfb67);
             color: #06100e;
-            font-weight: 900;
+            font-weight: 600;
             min-height: 3rem;
-            box-shadow: 0 0 26px rgba(102, 240, 95, 0.2);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            box-shadow: 0 0 12px rgba(102, 240, 95, 0.28);
+        }
+
+        .stApp div.stButton > button:hover {
+            outline: none !important;
+            border-color: rgba(102, 240, 95, 0.58) !important;
+            transform: scale(1.03);
+            filter: brightness(1.08);
+            box-shadow: 0 0 16px rgba(102, 240, 95, 0.45) !important;
+        }
+
+        .stApp div.stButton > button:active {
+            transform: scale(0.97);
+            transition: all 0.1s ease;
+        }
+
+        .stApp div.stButton > button:focus,
+        .stApp div.stButton > button:focus-visible {
+            outline: none !important;
+            border-color: rgba(102, 240, 95, 0.58) !important;
+            box-shadow: 0 0 0 2px rgba(102, 240, 95, 0.25), 0 0 16px rgba(102, 240, 95, 0.3) !important;
         }
 
         div[data-testid="stExpander"] {
@@ -1005,7 +1027,7 @@ def render_community_feed():
         )
 
 
-def render_profile_summary(profile):
+def render_profile_summary(profile, followers_count=0, following_count=0):
     goal = normalize_goal(profile["goal"])
     display_name = get_public_display_name(profile)
     username_label = get_username_label(profile)
@@ -1039,6 +1061,9 @@ def render_profile_summary(profile):
                 <div>
                     <div class="feed-name">{display_name}</div>
                     <div class="feed-meta">{username_label}</div>
+                    <div class="feed-meta" style="margin-top: 0.28rem;">
+                        <strong>{followers_count}</strong> followers&nbsp;&nbsp;·&nbsp;&nbsp;<strong>{following_count}</strong> following
+                    </div>
                 </div>
                 {goal_badge}
             </div>
@@ -1092,7 +1117,8 @@ def render_profile_summary(profile):
 def show_profile_setup(user_id, email):
     st.subheader("Complete your profile")
 
-    profile_name = st.text_input("Name")
+    pending_public_profile = st.session_state.get("pending_public_profile") or {}
+    profile_name = st.text_input("Name", value=pending_public_profile.get("display_name", ""))
     profile_goal = st.selectbox("Goal", GOALS)
     profile_age = st.number_input("Age", min_value=10, max_value=100, value=32)
     profile_height = st.number_input("Height (cm)", min_value=100, max_value=230, value=183)
@@ -1120,12 +1146,22 @@ def show_profile_setup(user_id, email):
                 activity_level=profile_activity,
             )
 
+            pending_username = pending_public_profile.get("username")
+            pending_display_name = pending_public_profile.get("display_name")
+            if pending_username:
+                update_public_profile(
+                    user_id=user_id,
+                    username=pending_username,
+                    display_name=pending_display_name or profile_name,
+                )
+                st.session_state.pop("pending_public_profile", None)
+
             st.success("Profile saved")
             st.rerun()
 
 
-def show_profile_editor(user_id, profile):
-    render_profile_summary(profile)
+def show_profile_editor(user_id, profile, followers_count=0, following_count=0):
+    render_profile_summary(profile, followers_count, following_count)
 
     render_spacer("md")
 

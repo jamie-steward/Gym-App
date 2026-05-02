@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import hashlib
 import json
 import re
 
@@ -36,6 +37,14 @@ def _token_info(token):
     }
 
 
+def _token_fingerprint(token):
+    token_text = str(token or "")
+    if not token_text:
+        return None
+
+    return hashlib.sha256(token_text.encode("utf-8")).hexdigest()[:10]
+
+
 def _safe_context_cookie_keys():
     try:
         return sorted(list(st.context.cookies.keys()))
@@ -53,7 +62,12 @@ def auth_log_event(event, **details):
     safe_details = {
         key: value
         for key, value in details.items()
-        if "token" not in key.lower() or key.lower().endswith("_info")
+        if (
+            "token" not in key.lower()
+            or key.lower().endswith("_info")
+            or key.lower().endswith("_fingerprint")
+            or key.lower().endswith("_changed")
+        )
     }
     events = st.session_state.get("auth_debug_events", [])
     events.append({"event": event, **safe_details})
@@ -431,25 +445,46 @@ def restore_session_from_cookie(rerun_after_restore=False):
         if user is None or session is None:
             raise ValueError("Supabase did not return a refreshed session.")
 
+        new_access_token = session.access_token
+        new_refresh_token = session.refresh_token
+        old_refresh_fingerprint = _token_fingerprint(refresh_token)
+        new_refresh_fingerprint = _token_fingerprint(new_refresh_token)
+        refresh_token_changed = old_refresh_fingerprint != new_refresh_fingerprint
+
         auth_log_event(
             "refresh_session_success",
             user_exists=user is not None,
             session_exists=session is not None,
-            access_token_info=_token_info(getattr(session, "access_token", None)),
-            refresh_token_info=_token_info(getattr(session, "refresh_token", None)),
+            access_token_info=_token_info(new_access_token),
+            refresh_token_info=_token_info(new_refresh_token),
+            refresh_token_changed=refresh_token_changed,
+            old_refresh_token_fingerprint=old_refresh_fingerprint,
+            new_refresh_token_fingerprint=new_refresh_fingerprint,
         )
-        store_auth_session(user, session)
+        st.session_state["auth_user"] = user
+        st.session_state["auth_user_id"] = user.id
+        st.session_state["auth_access_token"] = new_access_token
+        st.session_state["auth_refresh_token"] = new_refresh_token
+        st.session_state["last_email"] = user.email
+        st.session_state.pop("manual_logout", None)
+        set_auth_cookies(new_access_token, new_refresh_token)
         st.session_state["auth_restored_from_cookie"] = True
         auth_debug_state(
             restore_result="success",
             auth_user_exists=True,
             refresh_token_cookie_exists=True,
+            refresh_token_changed=refresh_token_changed,
+            old_refresh_token_fingerprint=old_refresh_fingerprint,
+            new_refresh_token_fingerprint=new_refresh_fingerprint,
         )
         auth_debug(
             "refresh_session succeeded; "
             f"auth_user_exists={st.session_state.get('auth_user') is not None}; "
             f"new_access_token_exists={bool(st.session_state.get('auth_access_token'))}; "
-            f"new_refresh_token_exists={bool(st.session_state.get('auth_refresh_token'))}"
+            f"new_refresh_token_exists={bool(st.session_state.get('auth_refresh_token'))}; "
+            f"refresh_token_changed={refresh_token_changed}; "
+            f"old_refresh_token_fingerprint={old_refresh_fingerprint}; "
+            f"new_refresh_token_fingerprint={new_refresh_fingerprint}"
         )
 
         if rerun_after_restore:

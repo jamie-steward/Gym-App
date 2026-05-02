@@ -335,6 +335,7 @@ def store_auth_session(user, session, controller=None):
         raise ValueError("Supabase did not return a complete login session.")
 
     st.session_state["auth_user"] = user
+    st.session_state["auth_user_id"] = user.id
     st.session_state["auth_access_token"] = session.access_token
     st.session_state["auth_refresh_token"] = session.refresh_token
     st.session_state["last_email"] = user.email
@@ -548,6 +549,7 @@ def signup_user(email, password, display_name, username):
 def logout_user():
     st.session_state["manual_logout"] = True
     st.session_state.pop("auth_user", None)
+    st.session_state.pop("auth_user_id", None)
     st.session_state.pop("auth_access_token", None)
     st.session_state.pop("auth_refresh_token", None)
     st.session_state.pop("auth_restore_attempted", None)
@@ -605,8 +607,7 @@ def show_login_form():
             try:
                 login_user(login_email, login_password)
                 st.success("Logged in")
-                if st.session_state.pop("auth_cookie_write_pending_reload", False):
-                    render_cookie_write_reload()
+                st.session_state.pop("auth_cookie_write_pending_reload", None)
                 st.rerun()
             except Exception as e:
                 st.error(f"Login failed: {e}")
@@ -636,8 +637,7 @@ def show_login_form():
                     st.info("Your username will be applied when you complete your profile after your first confirmed login.")
                 else:
                     st.success("Login created")
-                    if st.session_state.pop("auth_cookie_write_pending_reload", False):
-                        render_cookie_write_reload()
+                    st.session_state.pop("auth_cookie_write_pending_reload", None)
                     st.rerun()
             except Exception as e:
                 st.error(f"Signup failed: {e}")
@@ -645,6 +645,8 @@ def show_login_form():
 
 def require_login():
     restore_session()
+
+    st.write("auth_user exists:", "auth_user" in st.session_state)
 
     auth_user = st.session_state.get("auth_user")
     if auth_user is None:

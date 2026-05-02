@@ -1,13 +1,15 @@
 import streamlit as st
-from components.auth import render_restore_diagnostics, restore_session_from_cookie
+import uuid
+
+from components.auth import restore_session_from_cookie
 from components.navigation import restore_page_from_query
 from components.ui import add_dashboard_styles
 
 st.set_page_config(page_title="ShapeUp", layout="wide")
 st.session_state["supabase_client_created_this_run"] = False
+st.session_state["_auth_current_run_id"] = uuid.uuid4().hex
 add_dashboard_styles()
 restore_session_from_cookie(rerun_after_restore=True)
-render_restore_diagnostics()
 current_page = restore_page_from_query()
 
 pages = {

@@ -9,6 +9,7 @@ from components.database import (
     load_public_profiles,
     unfollow_user,
 )
+from components.navigation import remember_current_page
 from components.ui import (
     add_dashboard_styles,
     get_public_display_name,
@@ -24,6 +25,7 @@ from components.ui import (
 
 st.set_page_config(page_title="Communities", layout="wide")
 add_dashboard_styles()
+remember_current_page("communities")
 st.markdown(
     """
     <style>

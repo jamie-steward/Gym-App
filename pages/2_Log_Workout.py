@@ -19,6 +19,7 @@ from components.database import (
     update_workout_plan,
     update_workout_preset,
 )
+from components.navigation import remember_current_page
 from components.ui import (
     add_dashboard_styles,
     get_public_display_name,
@@ -31,6 +32,7 @@ from components.ui import (
 
 st.set_page_config(page_title="Log Workout", layout="wide")
 add_dashboard_styles()
+remember_current_page("log_workout")
 st.markdown(
     """
     <style>

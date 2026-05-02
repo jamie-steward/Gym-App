@@ -3,6 +3,7 @@ import streamlit as st
 from components.auth import require_login, show_logout_button
 from components.charts import calculate_weight_summary, show_goal_feedback, show_weight_chart
 from components.database import load_logs, load_profile
+from components.navigation import remember_current_page
 from components.ui import (
     add_dashboard_styles,
     get_public_display_name,
@@ -15,6 +16,7 @@ from components.ui import (
 
 st.set_page_config(page_title="Progress", layout="wide")
 add_dashboard_styles()
+remember_current_page("progress")
 
 user_id, email = require_login()
 show_logout_button(email)

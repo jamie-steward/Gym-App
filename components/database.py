@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from uuid import UUID
 from supabase import create_client
 
 
@@ -14,6 +15,19 @@ supabase = get_supabase_client()
 
 
 AVATAR_BUCKET = "avatars"
+# Default accounts new users automatically follow.
+# Future: move to database table if needed.
+DEFAULT_FOLLOW_USER_IDS = [
+    "3d0682bb-b6c7-4404-b8bb-643e055def38",
+]
+
+
+def is_valid_uuid(value):
+    try:
+        UUID(str(value))
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def calculate_targets(goal, height_cm, weight_kg, age, activity_level):
@@ -203,6 +217,30 @@ def follow_user(user_id, following_id):
     )
 
     return response.data[0] if response.data else None
+
+
+def apply_default_follows(user_id):
+    user_id = str(user_id)
+    existing_following_ids = set(load_following_ids(user_id))
+    applied = []
+
+    for default_user_id in DEFAULT_FOLLOW_USER_IDS:
+        default_user_id = str(default_user_id or "").strip()
+
+        if not is_valid_uuid(default_user_id):
+            continue
+
+        if default_user_id == user_id:
+            continue
+
+        if default_user_id in existing_following_ids:
+            continue
+
+        follow_user(user_id, default_user_id)
+        existing_following_ids.add(default_user_id)
+        applied.append(default_user_id)
+
+    return applied
 
 
 def unfollow_user(user_id, following_id):
@@ -584,6 +622,21 @@ def load_finished_workouts(user_id):
         summarize_workout(user_id, workout)
         for workout in (response.data or [])
     ]
+
+
+def delete_workout_log(workout_id, user_id):
+    workout_id = str(workout_id)
+    user_id = str(user_id)
+
+    response = (
+        supabase.table("workouts")
+        .delete()
+        .eq("id", workout_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    return response.data or []
 
 
 def get_previous_best_1rm(user_id, exercise_name, current_workout_id=None):

@@ -4,12 +4,14 @@ from html import escape
 import streamlit as st
 
 from components.auth import require_login, show_logout_button
-from components.database import load_finished_workouts, load_profile
+from components.database import delete_workout_log, load_finished_workouts, load_profile
+from components.navigation import go_to_page, remember_current_page
 from components.ui import add_dashboard_styles, get_public_display_name, render_app_header, render_page_heading, render_spacer
 
 
 st.set_page_config(page_title="Workout History", layout="wide")
 add_dashboard_styles()
+remember_current_page("workout_history")
 
 
 def parse_workout_datetime(value):
@@ -77,7 +79,8 @@ def set_label(row):
     return f"{float(weight):g}x{reps}"
 
 
-def render_workout_card(summary, is_latest=False):
+def render_workout_card(summary, user_id, is_latest=False):
+    workout_id = summary.get("workout", {}).get("id")
     pr_text = f"{summary['pr_count']} PRs" if summary["pr_count"] else "No PRs"
     label = "Latest completed workout" if is_latest else "Completed workout"
 
@@ -133,6 +136,43 @@ def render_workout_card(summary, is_latest=False):
                 unsafe_allow_html=True,
             )
 
+    render_delete_workout_controls(workout_id, user_id)
+
+
+def render_delete_workout_controls(workout_id, user_id):
+    if not workout_id:
+        st.error("This workout is missing an ID, so it cannot be deleted.")
+        return
+
+    confirm_key = f"confirm_delete_workout_{workout_id}"
+
+    if not st.session_state.get(confirm_key):
+        if st.button("Delete workout", key=f"delete_workout_{workout_id}", type="secondary"):
+            st.session_state[confirm_key] = True
+            st.rerun()
+        return
+
+    st.warning("Are you sure you want to delete this workout? This cannot be undone.")
+    confirm_col, cancel_col = st.columns(2)
+
+    with confirm_col:
+        if st.button("Yes, delete workout", key=f"confirm_delete_workout_button_{workout_id}", type="primary"):
+            try:
+                deleted_rows = delete_workout_log(workout_id, user_id)
+                if deleted_rows:
+                    st.session_state.pop(confirm_key, None)
+                    st.success("Workout deleted.")
+                    st.rerun()
+                else:
+                    st.error("Workout could not be deleted. It may already be gone, or you may not have permission.")
+            except Exception as e:
+                st.error(f"Workout delete failed: {e}")
+
+    with cancel_col:
+        if st.button("Cancel", key=f"cancel_delete_workout_{workout_id}"):
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
+
 
 user_id, email = require_login()
 show_logout_button(email)
@@ -157,14 +197,14 @@ if not finished_workouts:
     )
 
     if st.button("Log your first workout", use_container_width=True):
-        st.switch_page("pages/2_Log_Workout.py")
+        go_to_page("log_workout")
 
     st.stop()
 
-render_workout_card(finished_workouts[0], is_latest=True)
+render_workout_card(finished_workouts[0], user_id, is_latest=True)
 
 render_spacer("section")
 
 for workout in finished_workouts[1:]:
-    render_workout_card(workout)
+    render_workout_card(workout, user_id)
     render_spacer("lg")

@@ -6,6 +6,7 @@ import streamlit as st
 from components.auth import require_login, show_logout_button
 from components.charts import calculate_weight_summary, show_recent_weight_chart
 from components.database import load_last_finished_workout, load_logs, load_profile, save_log_entry
+from components.navigation import go_to_page, remember_current_page
 from components.ui import (
     add_dashboard_styles,
     render_app_header,
@@ -23,6 +24,7 @@ from components.ui import (
 
 st.set_page_config(page_title="Home", layout="wide")
 add_dashboard_styles()
+remember_current_page("home")
 
 
 user_id, email = require_login()
@@ -163,13 +165,10 @@ def show_last_workout_card(summary):
         cta_label = "View workouts"
 
     if st.button(cta_label, use_container_width=True, key="home_last_workout_cta"):
-        try:
-            if summary is None:
-                st.switch_page("pages/2_Log_Workout.py")
-            else:
-                st.switch_page("pages/3_Workout_History.py")
-        except Exception:
-            st.info("Open Workout History from the sidebar.")
+        if summary is None:
+            go_to_page("log_workout")
+        else:
+            go_to_page("workout_history")
 
 
 if hasattr(st, "dialog"):
@@ -223,16 +222,10 @@ with action_col:
         show_log_weight_dialog()
 
     if st.button("🏋️\nLog Workout", use_container_width=True):
-        try:
-            st.switch_page("pages/2_Log_Workout.py")
-        except Exception:
-            st.info("Open the Log Workout page from the sidebar.")
+        st.switch_page("pages/2_Log_Workout.py")
 
     if st.button("🎯\nSet Goal", use_container_width=True):
-        try:
-            st.switch_page("pages/4_Profile.py")
-        except Exception:
-            st.info("Open the Profile page to update your goal.")
+        go_to_page("profile")
 
     if st.session_state.get("show_inline_log_weight"):
         show_log_weight_fields()

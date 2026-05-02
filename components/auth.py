@@ -81,6 +81,8 @@ def get_auth_debug_snapshot():
         "cookie_write_method": state.get("cookie_write_method"),
         "cookie_write_attempted": state.get("cookie_write_attempted", False),
         "cookie_write_error": state.get("cookie_write_error"),
+        "cookie_read_source": state.get("cookie_read_source", "missing"),
+        "controller_refresh_token_exists": state.get("controller_refresh_token_exists", False),
         "note": state.get("note", COOKIE_WRITE_NOTE),
         "debug_events": st.session_state.get("auth_debug_events", []),
     }
@@ -182,11 +184,56 @@ def clear_auth_cookies(controller=None):
 
 
 def get_refresh_token_from_cookie(controller=None):
-    return st.context.cookies.get(AUTH_REFRESH_COOKIE)
+    return get_auth_cookie(AUTH_REFRESH_COOKIE)
 
 
 def get_access_token_from_cookie(controller=None):
-    return st.context.cookies.get(AUTH_ACCESS_COOKIE)
+    return get_auth_cookie(AUTH_ACCESS_COOKIE)
+
+
+def get_auth_cookie(name):
+    context_value = st.context.cookies.get(name)
+    if context_value:
+        auth_debug_state(cookie_read_source="st.context.cookies")
+        auth_log_event(
+            "auth_cookie_read",
+            name=name,
+            source="st.context.cookies",
+            cookie_info=_token_info(context_value),
+        )
+        return context_value
+
+    controller_value = None
+    controller_error = None
+
+    try:
+        controller = get_cookie_controller()
+        if controller is not None:
+            controller_value = controller.get(name)
+    except Exception as e:
+        controller_error = str(e)
+
+    if name == AUTH_REFRESH_COOKIE:
+        auth_debug_state(controller_refresh_token_exists=bool(controller_value))
+
+    if controller_value:
+        auth_debug_state(cookie_read_source="cookie_controller")
+        auth_log_event(
+            "auth_cookie_read",
+            name=name,
+            source="cookie_controller",
+            cookie_info=_token_info(controller_value),
+        )
+        return controller_value
+
+    auth_debug_state(cookie_read_source="missing")
+    auth_log_event(
+        "auth_cookie_read",
+        name=name,
+        source="missing",
+        error=controller_error,
+    )
+    return None
 
 
 def render_cookie_write_reload():
@@ -389,6 +436,7 @@ def restore_session_from_cookie(rerun_after_restore=False):
         context_cookie_keys=_safe_context_cookie_keys(),
         access_token_info=_token_info(access_cookie),
         refresh_token_info=_token_info(refresh_token),
+        cookie_read_source=st.session_state.get("auth_debug_state", {}).get("cookie_read_source", "missing"),
     )
     auth_debug_state(
         refresh_token_cookie_exists=bool(refresh_token),
@@ -401,13 +449,16 @@ def restore_session_from_cookie(rerun_after_restore=False):
         f"refresh_token_cookie_exists={bool(refresh_token)}"
     )
 
-    st.session_state["auth_restore_attempted"] = True
-    auth_debug_state(auth_restore_attempted=True)
-
     if not refresh_token:
         auth_log_event("restore_session_from_cookie_result", result="no_cookie")
-        auth_debug_state(restore_result="no_cookie")
+        auth_debug_state(
+            auth_restore_attempted=False,
+            restore_result="no_cookie",
+        )
         return False
+
+    st.session_state["auth_restore_attempted"] = True
+    auth_debug_state(auth_restore_attempted=True)
 
     try:
         auth_log_event(
@@ -473,9 +524,6 @@ def restore_session():
 
     if restore_session_from_cookie(rerun_after_restore=True):
         return
-
-    if not st.session_state.get("manual_logout"):
-        st.session_state["auth_restore_attempted"] = True
 
 
 def login_user(email, password):

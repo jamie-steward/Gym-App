@@ -4,13 +4,46 @@ from uuid import UUID
 from supabase import create_client
 
 
-def get_supabase_client():
+def get_fresh_supabase_client():
+    """Create a new Supabase client for this script run.
+
+    Supabase clients can carry auth/session state, so this must not be cached
+    or stored as a module-level real client in Streamlit.
+    """
+    st.session_state["supabase_client_created_this_run"] = True
     supabase_url = st.secrets["SUPABASE_URL"]
     supabase_key = st.secrets["SUPABASE_KEY"]
     return create_client(supabase_url, supabase_key)
 
 
-supabase = get_supabase_client()
+def get_supabase_client():
+    return get_fresh_supabase_client()
+
+
+def get_current_supabase_client():
+    client = get_fresh_supabase_client()
+    access_token = st.session_state.get("auth_access_token")
+    refresh_token = st.session_state.get("auth_refresh_token")
+
+    if access_token and refresh_token:
+        try:
+            client.auth.set_session(access_token, refresh_token)
+        except Exception:
+            # Let the actual query surface any auth/RLS issue. The important
+            # part is that this fresh client never reuses another user's state.
+            pass
+
+    return client
+
+
+class SupabaseClientProxy:
+    """Backwards-compatible fresh-client proxy for existing database helpers."""
+
+    def __getattr__(self, name):
+        return getattr(get_current_supabase_client(), name)
+
+
+supabase = SupabaseClientProxy()
 
 
 AVATAR_BUCKET = "avatars"

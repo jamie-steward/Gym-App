@@ -1,10 +1,16 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import hashlib
 import json
 import re
 
-from components.database import apply_default_follows, is_username_available, normalize_username, supabase
+import streamlit.components.v1 as components
+
+from components.database import (
+    apply_default_follows,
+    get_fresh_supabase_client,
+    is_username_available,
+    normalize_username,
+)
 
 try:
     from streamlit_cookies_controller import CookieController
@@ -19,7 +25,6 @@ AUTH_REFRESH_COOKIE = "sb_refresh_token"
 AUTH_COOKIE_CONTROLLER_KEY = "auth_cookie_controller"
 COOKIE_MAX_AGE = 60 * 60 * 24 * 30
 USERNAME_PATTERN = re.compile(r"^[a-z0-9_]{3,20}$")
-_runtime_cookie_controller = None
 COOKIE_WRITE_METHOD = "streamlit-cookies-controller"
 COOKIE_WRITE_NOTE = "st.context.cookies only updates on next browser request/rerun"
 
@@ -75,21 +80,11 @@ def auth_log_event(event, **details):
     auth_debug(f"{event}: {safe_details}")
 
 
-def initialize_cookie_controller():
-    global _runtime_cookie_controller
-
+def get_cookie_controller(purpose="reader"):
     if CookieController is None:
         return None
 
-    _runtime_cookie_controller = CookieController(key=AUTH_COOKIE_CONTROLLER_KEY)
-    return _runtime_cookie_controller
-
-
-def get_cookie_controller():
-    if _runtime_cookie_controller is not None:
-        return _runtime_cookie_controller
-
-    return initialize_cookie_controller()
+    return CookieController(key=f"{AUTH_COOKIE_CONTROLLER_KEY}_{purpose}")
 
 
 def set_auth_cookies(access_token, refresh_token, controller=None):
@@ -107,7 +102,7 @@ def set_auth_cookies(access_token, refresh_token, controller=None):
     )
 
     try:
-        controller = controller or get_cookie_controller()
+        controller = controller or get_cookie_controller("writer")
         if controller is None:
             auth_debug_state(cookie_write_error="cookie_controller_unavailable")
             auth_log_event("set_auth_cookies_failed", reason="cookie_controller_unavailable")
@@ -139,7 +134,7 @@ def clear_auth_cookies(controller=None):
     auth_log_event("clear_auth_cookies_start")
 
     try:
-        controller = controller or get_cookie_controller()
+        controller = controller or get_cookie_controller("clearer")
         if controller is None:
             auth_log_event("clear_auth_cookies_skipped", reason="cookie_controller_unavailable")
             return
@@ -156,15 +151,26 @@ def clear_auth_cookies(controller=None):
         raise
 
 
+def clear_auth_session_state():
+    for key in (
+        "auth_user",
+        "auth_user_id",
+        "auth_access_token",
+        "auth_refresh_token",
+        "auth_restored_from_cookie",
+    ):
+        st.session_state.pop(key, None)
+
+
 def get_refresh_token_from_cookie(controller=None):
-    return get_auth_cookie(AUTH_REFRESH_COOKIE)
+    return get_auth_cookie(AUTH_REFRESH_COOKIE, controller)
 
 
 def get_access_token_from_cookie(controller=None):
-    return get_auth_cookie(AUTH_ACCESS_COOKIE)
+    return get_auth_cookie(AUTH_ACCESS_COOKIE, controller)
 
 
-def get_auth_cookie(name):
+def get_auth_cookie(name, controller=None):
     context_value = st.context.cookies.get(name)
     if context_value:
         auth_debug_state(cookie_read_source="st.context.cookies")
@@ -180,7 +186,7 @@ def get_auth_cookie(name):
     controller_error = None
 
     try:
-        controller = get_cookie_controller()
+        controller = controller or get_cookie_controller("reader")
         if controller is not None:
             controller_value = controller.get(name)
     except Exception as e:
@@ -207,6 +213,64 @@ def get_auth_cookie(name):
         error=controller_error,
     )
     return None
+
+
+def render_auth_safety_debug():
+    debug_state = st.session_state.get("auth_debug_state", {})
+    context_refresh = st.context.cookies.get(AUTH_REFRESH_COOKIE)
+    controller_refresh = None
+    controller_error = None
+
+    try:
+        controller = get_cookie_controller("debug")
+        if controller is not None:
+            controller_refresh = controller.get(AUTH_REFRESH_COOKIE)
+    except Exception as e:
+        controller_error = str(e)
+
+    cookie_source = "missing"
+    if context_refresh:
+        cookie_source = "st.context.cookies"
+    elif controller_refresh:
+        cookie_source = "cookie_controller"
+
+    st.info(
+        "Auth safety debug: "
+        f"session auth_user_id={st.session_state.get('auth_user_id')}; "
+        f"refresh cookie exists={bool(context_refresh or controller_refresh)}; "
+        f"cookie source={debug_state.get('cookie_read_source', cookie_source)}; "
+        f"restore attempted={bool(st.session_state.get('auth_restore_attempted'))}; "
+        f"restore result={debug_state.get('restore_result', 'not_run')}; "
+        f"fresh Supabase client created this run={bool(st.session_state.get('supabase_client_created_this_run'))}"
+        + (f"; cookie debug error={controller_error}" if controller_error else "")
+    )
+
+
+def render_restore_diagnostics():
+    debug_state = st.session_state.get("auth_debug_state", {})
+    diagnostics = {
+        "restore_session_from_cookie_ran": bool(debug_state.get("restore_ran")),
+        "refresh_cookie_exists": bool(debug_state.get("refresh_token_cookie_exists")),
+        "refresh_cookie_length": int(debug_state.get("refresh_token_cookie_length") or 0),
+        "cookie_source": debug_state.get("cookie_read_source", "missing"),
+        "fresh_client_created": bool(st.session_state.get("supabase_client_created_this_run")),
+        "fresh_client_created_before_refresh": bool(debug_state.get("fresh_client_created_before_refresh")),
+        "fresh_client_created_after_refresh": bool(debug_state.get("fresh_client_created_after_refresh")),
+        "refresh_session_called": bool(debug_state.get("refresh_session_called")),
+        "refresh_session_succeeded": bool(debug_state.get("refresh_session_succeeded")),
+        "refresh_session_error": debug_state.get("refresh_session_error"),
+        "response_session_exists": bool(debug_state.get("response_session_exists")),
+        "response_user_exists": bool(debug_state.get("response_user_exists")),
+        "session_user_exists": bool(debug_state.get("session_user_exists")),
+        "auth_user_set_after_restore": bool(debug_state.get("auth_user_set_after_restore")),
+        "auth_user_id": st.session_state.get("auth_user_id"),
+        "restore_attempted": bool(st.session_state.get("auth_restore_attempted")),
+        "restore_result": debug_state.get("restore_result", "not_run"),
+        "restore_skip_reason": debug_state.get("restore_skip_reason"),
+    }
+
+    with st.expander("Temporary auth restore diagnostics", expanded=True):
+        st.json(diagnostics)
 
 
 def render_cookie_write_reload():
@@ -347,7 +411,10 @@ def apply_session(session_data):
     st.session_state["auth_access_token"] = session_data["access_token"]
     st.session_state["auth_refresh_token"] = session_data["refresh_token"]
     st.session_state["last_email"] = session_data["email"]
-    supabase.auth.set_session(session_data["access_token"], session_data["refresh_token"])
+    get_fresh_supabase_client().auth.set_session(
+        session_data["access_token"],
+        session_data["refresh_token"],
+    )
 
 
 def store_auth_session(user, session, controller=None):
@@ -360,7 +427,7 @@ def store_auth_session(user, session, controller=None):
     st.session_state["auth_refresh_token"] = session.refresh_token
     st.session_state["last_email"] = user.email
     st.session_state.pop("manual_logout", None)
-    st.session_state["auth_restore_attempted"] = True
+    st.session_state.pop("auth_restore_attempted", None)
     cookie_write_ok = set_auth_cookies(session.access_token, session.refresh_token, controller)
     st.session_state["auth_cookie_write_pending_reload"] = bool(cookie_write_ok)
     auth_debug_state(
@@ -378,6 +445,17 @@ def store_auth_session(user, session, controller=None):
 def restore_session_from_cookie(rerun_after_restore=False):
     auth_log_event("restore_session_from_cookie_start")
     auth_debug("restore_session_from_cookie() called")
+    auth_debug_state(
+        restore_ran=True,
+        restore_skip_reason=None,
+        refresh_session_called=False,
+        refresh_session_succeeded=False,
+        refresh_session_error=None,
+        response_session_exists=False,
+        response_user_exists=False,
+        session_user_exists=False,
+        auth_user_set_after_restore=st.session_state.get("auth_user") is not None,
+    )
 
     if st.session_state.get("auth_user") and st.session_state.get("auth_access_token"):
         auth_log_event(
@@ -389,21 +467,29 @@ def restore_session_from_cookie(rerun_after_restore=False):
             "Session restored from session_state; "
             f"auth_user_exists={st.session_state.get('auth_user') is not None}"
         )
+        auth_debug_state(
+            restore_result="session_state_user_exists",
+            restore_skip_reason="session_state_user_exists",
+            auth_user_set_after_restore=True,
+        )
         return True
 
     if st.session_state.get("manual_logout"):
         auth_log_event("restore_session_from_cookie_skip", reason="manual_logout")
         auth_debug("Cookie restore skipped after manual logout")
-        auth_debug_state(restore_result="manual_logout")
+        auth_debug_state(
+            restore_result="manual_logout",
+            restore_skip_reason="manual_logout",
+            auth_user_set_after_restore=st.session_state.get("auth_user") is not None,
+        )
         return False
 
-    if st.session_state.get("auth_restore_attempted"):
-        auth_log_event("restore_session_from_cookie_skip", reason="already_attempted")
-        auth_debug("Cookie restore skipped; already attempted this Streamlit session")
-        return False
+    st.session_state["auth_restore_attempted"] = True
+    auth_debug_state(auth_restore_attempted=True)
 
-    access_cookie = get_access_token_from_cookie()
-    refresh_token = get_refresh_token_from_cookie()
+    cookie_controller = get_cookie_controller()
+    access_cookie = get_access_token_from_cookie(cookie_controller)
+    refresh_token = get_refresh_token_from_cookie(cookie_controller)
     auth_log_event(
         "restore_session_cookie_read",
         context_cookie_keys=_safe_context_cookie_keys(),
@@ -413,7 +499,10 @@ def restore_session_from_cookie(rerun_after_restore=False):
     )
     auth_debug_state(
         refresh_token_cookie_exists=bool(refresh_token),
-        auth_restore_attempted=False,
+        refresh_token_cookie_length=len(str(refresh_token or "")),
+        access_token_cookie_exists=bool(access_cookie),
+        access_token_cookie_length=len(str(access_cookie or "")),
+        auth_restore_attempted=True,
         auth_user_exists=False,
     )
     auth_debug(
@@ -425,22 +514,31 @@ def restore_session_from_cookie(rerun_after_restore=False):
     if not refresh_token:
         auth_log_event("restore_session_from_cookie_result", result="no_cookie")
         auth_debug_state(
-            auth_restore_attempted=False,
+            auth_restore_attempted=True,
             restore_result="no_cookie",
+            auth_user_set_after_restore=st.session_state.get("auth_user") is not None,
         )
         return False
-
-    st.session_state["auth_restore_attempted"] = True
-    auth_debug_state(auth_restore_attempted=True)
 
     try:
         auth_log_event(
             "refresh_session_start",
             refresh_token_info=_token_info(refresh_token),
         )
-        response = supabase.auth.refresh_session(refresh_token)
+        auth_debug_state(
+            refresh_session_called=True,
+            fresh_client_created_before_refresh=bool(st.session_state.get("supabase_client_created_this_run")),
+        )
+        response = get_fresh_supabase_client().auth.refresh_session(refresh_token)
         session = response.session
         user = response.user or getattr(session, "user", None)
+        session_user = getattr(session, "user", None) if session is not None else None
+        auth_debug_state(
+            fresh_client_created_after_refresh=bool(st.session_state.get("supabase_client_created_this_run")),
+            response_session_exists=session is not None,
+            response_user_exists=response.user is not None,
+            session_user_exists=session_user is not None,
+        )
 
         if user is None or session is None:
             raise ValueError("Supabase did not return a refreshed session.")
@@ -472,6 +570,9 @@ def restore_session_from_cookie(rerun_after_restore=False):
         auth_debug_state(
             restore_result="success",
             auth_user_exists=True,
+            auth_user_set_after_restore=st.session_state.get("auth_user") is not None,
+            refresh_session_succeeded=True,
+            refresh_session_error=None,
             refresh_token_cookie_exists=True,
             refresh_token_changed=refresh_token_changed,
             old_refresh_token_fingerprint=old_refresh_fingerprint,
@@ -487,16 +588,17 @@ def restore_session_from_cookie(rerun_after_restore=False):
             f"new_refresh_token_fingerprint={new_refresh_fingerprint}"
         )
 
-        if rerun_after_restore:
-            st.rerun()
-
         return True
     except Exception as e:
         auth_log_event("refresh_session_failed", error=str(e))
         clear_auth_cookies()
+        clear_auth_session_state()
         auth_debug_state(
             restore_result=f"failed: {e}",
             auth_user_exists=False,
+            auth_user_set_after_restore=st.session_state.get("auth_user") is not None,
+            refresh_session_succeeded=False,
+            refresh_session_error=str(e),
         )
         auth_debug(f"refresh_session failed -> cleared cookies: {e}")
         return False
@@ -505,16 +607,14 @@ def restore_session_from_cookie(rerun_after_restore=False):
 def restore_session():
     if st.session_state.get("auth_user") and st.session_state.get("auth_access_token"):
         try:
-            supabase.auth.set_session(
+            get_fresh_supabase_client().auth.set_session(
                 st.session_state["auth_access_token"],
                 st.session_state["auth_refresh_token"],
             )
             auth_debug("Session restored from session_state")
             return
         except Exception:
-            st.session_state.pop("auth_user", None)
-            st.session_state.pop("auth_access_token", None)
-            st.session_state.pop("auth_refresh_token", None)
+            clear_auth_session_state()
 
     if restore_session_from_cookie(rerun_after_restore=True):
         return
@@ -524,7 +624,7 @@ def login_user(email, password):
     auth_log_event("login_start", email_provided=bool(email))
 
     try:
-        response = supabase.auth.sign_in_with_password({
+        response = get_fresh_supabase_client().auth.sign_in_with_password({
             "email": email,
             "password": password,
         })
@@ -562,7 +662,7 @@ def signup_user(email, password, display_name, username):
     if validation_error:
         raise ValueError(validation_error)
 
-    response = supabase.auth.sign_up({
+    response = get_fresh_supabase_client().auth.sign_up({
         "email": email,
         "password": password,
     })
@@ -604,7 +704,7 @@ def logout_user():
     clear_auth_cookies()
     st.session_state["auth_cookie_clear_pending_reload"] = True
     clear_browser_session()
-    supabase.auth.sign_out()
+    get_fresh_supabase_client().auth.sign_out()
 
 
 def logout():
@@ -628,6 +728,8 @@ def show_login_form():
     if st.session_state.get("manual_logout"):
         clear_browser_session()
 
+    render_auth_safety_debug()
+
     st.markdown(
         """
         <div class="shape-brand" style="margin: 2rem 0 1.5rem 0;">
@@ -649,7 +751,8 @@ def show_login_form():
             try:
                 login_user(login_email, login_password)
                 st.success("Logged in")
-                st.session_state.pop("auth_cookie_write_pending_reload", None)
+                if st.session_state.pop("auth_cookie_write_pending_reload", False):
+                    render_cookie_write_reload()
                 st.rerun()
             except Exception as e:
                 st.error(f"Login failed: {e}")
@@ -679,7 +782,8 @@ def show_login_form():
                     st.info("Your username will be applied when you complete your profile after your first confirmed login.")
                 else:
                     st.success("Login created")
-                    st.session_state.pop("auth_cookie_write_pending_reload", None)
+                    if st.session_state.pop("auth_cookie_write_pending_reload", False):
+                        render_cookie_write_reload()
                     st.rerun()
             except Exception as e:
                 st.error(f"Signup failed: {e}")
@@ -693,6 +797,7 @@ def require_login():
         show_login_form()
         st.stop()
 
+    render_auth_safety_debug()
     return auth_user.id, auth_user.email
 
 

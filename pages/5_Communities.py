@@ -1,6 +1,6 @@
 import streamlit as st
 
-from components.auth import require_login, show_logout_button
+from components.auth import require_login
 from components.database import (
     follow_user,
     load_following_ids,
@@ -175,7 +175,6 @@ def render_person_card(current_user_id, person, following_ids, section_key, idx)
 
 
 user_id, email = require_login()
-show_logout_button(email)
 
 profile = load_profile(user_id)
 display_name = get_public_display_name(profile, email)

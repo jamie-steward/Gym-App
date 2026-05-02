@@ -3,7 +3,7 @@ from html import escape
 
 import streamlit as st
 
-from components.auth import require_login, show_logout_button
+from components.auth import require_login
 from components.database import delete_workout_log, load_finished_workouts, load_profile
 from components.navigation import go_to_page, remember_current_page
 from components.ui import add_dashboard_styles, get_public_display_name, render_app_header, render_page_heading, render_spacer
@@ -175,7 +175,6 @@ def render_delete_workout_controls(workout_id, user_id):
 
 
 user_id, email = require_login()
-show_logout_button(email)
 
 profile = load_profile(user_id)
 render_app_header(get_public_display_name(profile, email), profile.get("avatar_url") if profile else None)

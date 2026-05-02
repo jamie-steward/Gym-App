@@ -1,6 +1,6 @@
 import streamlit as st
 
-from components.auth import require_login, show_logout_button
+from components.auth import require_login
 from components.database import count_followers, count_following, load_logs, load_profile
 from components.navigation import remember_current_page
 from components.ui import (
@@ -19,7 +19,6 @@ add_dashboard_styles()
 remember_current_page("profile")
 
 user_id, email = require_login()
-show_logout_button(email)
 
 profile = load_profile(user_id)
 followers_count = count_followers(user_id)

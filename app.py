@@ -1,7 +1,7 @@
 import streamlit as st
 import uuid
 
-from components.auth import restore_session_from_cookie
+from components.auth import get_current_user, restore_session_from_cookie, show_logout_button
 from components.navigation import restore_page_from_query
 from components.ui import add_dashboard_styles
 
@@ -10,6 +10,10 @@ st.session_state["supabase_client_created_this_run"] = False
 st.session_state["_auth_current_run_id"] = uuid.uuid4().hex
 add_dashboard_styles()
 restore_session_from_cookie(rerun_after_restore=True)
+current_user = get_current_user()
+if current_user:
+    show_logout_button(current_user["email"], source="app.py/app shell")
+
 current_page = restore_page_from_query()
 
 pages = {

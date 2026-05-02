@@ -145,7 +145,7 @@ def clear_auth_cookies(controller=None):
 
         for cookie_name in (AUTH_ACCESS_COOKIE, AUTH_REFRESH_COOKIE):
             try:
-                controller.remove(cookie_name, path="/")
+                controller.remove(cookie_name, path="/", same_site="lax")
             except KeyError:
                 auth_log_event("clear_auth_cookie_missing", cookie_name=cookie_name)
 
@@ -161,7 +161,14 @@ def clear_auth_session_state():
         "auth_user_id",
         "auth_access_token",
         "auth_refresh_token",
+        "auth_restore_attempted",
+        "auth_restore_result",
         "auth_restored_from_cookie",
+        "auth_debug_state",
+        "auth_debug_events",
+        "auth_cookie_write_pending_reload",
+        "auth_cookie_clear_pending_reload",
+        "_auth_restore_run_id",
     ):
         st.session_state.pop(key, None)
 
@@ -243,11 +250,18 @@ def render_cookie_write_reload():
 
 def render_cookie_clear_reload():
     components.html(
-        """
+        f"""
         <script>
-        setTimeout(() => {
+        const authCookies = ["{AUTH_ACCESS_COOKIE}", "{AUTH_REFRESH_COOKIE}"];
+        for (const name of authCookies) {{
+            document.cookie = `${{name}}=; Max-Age=0; path=/; SameSite=Lax`;
+            try {{
+                window.parent.document.cookie = `${{name}}=; Max-Age=0; path=/; SameSite=Lax`;
+            }} catch (error) {{}}
+        }}
+        setTimeout(() => {{
             window.parent.location.reload();
-        }, 700);
+        }}, 700);
         </script>
         """,
         height=0,
@@ -648,13 +662,20 @@ def signup_user(email, password, display_name, username):
 
 
 def logout_user():
+    access_token = st.session_state.get("auth_access_token")
+    refresh_token = st.session_state.get("auth_refresh_token")
+
     st.session_state["manual_logout"] = True
-    st.session_state.pop("auth_user", None)
-    st.session_state.pop("auth_user_id", None)
-    st.session_state.pop("auth_access_token", None)
-    st.session_state.pop("auth_refresh_token", None)
-    st.session_state.pop("auth_restore_attempted", None)
-    st.session_state.pop("auth_restored_from_cookie", None)
+
+    if access_token and refresh_token:
+        try:
+            auth_client = get_fresh_supabase_client()
+            auth_client.auth.set_session(access_token, refresh_token)
+            auth_client.auth.sign_out()
+        except Exception as e:
+            auth_log_event("logout_supabase_sign_out_failed", error=str(e))
+
+    clear_auth_session_state()
     st.session_state["auth_debug_state"] = {
         "refresh_token_cookie_exists": False,
         "restore_result": "logged_out",
@@ -663,7 +684,6 @@ def logout_user():
     clear_auth_cookies()
     st.session_state["auth_cookie_clear_pending_reload"] = True
     clear_browser_session()
-    get_fresh_supabase_client().auth.sign_out()
 
 
 def logout():
@@ -761,7 +781,7 @@ def require_auth():
     return require_login()
 
 
-def show_logout_button(email):
+def show_logout_button(email, source="components.auth.show_logout_button"):
     st.markdown('<div class="account-bar">', unsafe_allow_html=True)
     top_left, top_right = st.columns([4, 1])
 

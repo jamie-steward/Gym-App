@@ -4,7 +4,7 @@ import json
 
 import streamlit as st
 
-from components.auth import require_login, show_logout_button
+from components.auth import require_login
 from components.database import (
     create_workout,
     delete_workout_set,
@@ -1005,7 +1005,6 @@ def show_finish_workout(user_id, active_workout):
 
 
 user_id, email = require_login()
-show_logout_button(email)
 
 profile = load_profile(user_id)
 render_app_header(get_public_display_name(profile, email), profile.get("avatar_url") if profile else None)

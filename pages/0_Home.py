@@ -3,7 +3,7 @@ from html import escape
 
 import streamlit as st
 
-from components.auth import require_login, show_logout_button
+from components.auth import require_login
 from components.charts import calculate_weight_summary, show_recent_weight_chart
 from components.database import load_last_finished_workout, load_logs, load_profile, save_log_entry
 from components.navigation import go_to_page, remember_current_page
@@ -28,7 +28,6 @@ remember_current_page("home")
 
 
 user_id, email = require_login()
-show_logout_button(email)
 
 profile = load_profile(user_id)
 

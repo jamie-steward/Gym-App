@@ -12,7 +12,7 @@ add_dashboard_styles()
 restore_session_from_cookie(rerun_after_restore=True)
 current_user = get_current_user()
 if current_user:
-    show_logout_button(current_user["email"], source="app.py/app shell")
+    show_logout_button(current_user["email"])
 
 current_page = restore_page_from_query()
 

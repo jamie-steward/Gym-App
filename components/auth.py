@@ -61,47 +61,6 @@ def auth_log_event(event, **details):
     auth_debug(f"{event}: {safe_details}")
 
 
-def get_auth_debug_snapshot():
-    auth_user = st.session_state.get("auth_user")
-    access_cookie = get_access_token_from_cookie()
-    refresh_cookie = get_refresh_token_from_cookie()
-    state = st.session_state.get("auth_debug_state", {})
-
-    return {
-        "st_context_cookie_keys": _safe_context_cookie_keys(),
-        "sb_access_token": _token_info(access_cookie),
-        "sb_refresh_token": _token_info(refresh_cookie),
-        "auth_restore_attempted": st.session_state.get("auth_restore_attempted", False),
-        "auth_restore_result": state.get("restore_result", "not_attempted"),
-        "auth_user_exists": auth_user is not None,
-        "auth_user_email": getattr(auth_user, "email", None),
-        "auth_user_id": getattr(auth_user, "id", None),
-        "session_auth_access_token": _token_info(st.session_state.get("auth_access_token")),
-        "session_auth_refresh_token": _token_info(st.session_state.get("auth_refresh_token")),
-        "cookie_write_method": state.get("cookie_write_method"),
-        "cookie_write_attempted": state.get("cookie_write_attempted", False),
-        "cookie_write_error": state.get("cookie_write_error"),
-        "cookie_read_source": state.get("cookie_read_source", "missing"),
-        "controller_refresh_token_exists": state.get("controller_refresh_token_exists", False),
-        "note": state.get("note", COOKIE_WRITE_NOTE),
-        "debug_events": st.session_state.get("auth_debug_events", []),
-    }
-
-
-def render_auth_debug_panel():
-    st.subheader("Temporary auth debug")
-    st.caption("Token values are hidden. Only existence and string length are shown.")
-    st.json(get_auth_debug_snapshot())
-
-
-def show_auth_debug_panel():
-    if not bool(st.secrets.get("DEV_MODE", False)):
-        return
-
-    st.sidebar.caption("Auth debug")
-    st.sidebar.json(get_auth_debug_snapshot())
-
-
 def initialize_cookie_controller():
     global _runtime_cookie_controller
 
@@ -634,8 +593,6 @@ def show_login_form():
     if st.session_state.get("manual_logout"):
         clear_browser_session()
 
-    render_auth_debug_panel()
-
     st.markdown(
         """
         <div class="shape-brand" style="margin: 2rem 0 1.5rem 0;">
@@ -695,8 +652,6 @@ def show_login_form():
 
 def require_login():
     restore_session()
-
-    st.write("auth_user exists:", "auth_user" in st.session_state)
 
     auth_user = st.session_state.get("auth_user")
     if auth_user is None:

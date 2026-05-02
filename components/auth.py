@@ -138,8 +138,8 @@ def set_auth_cookies(access_token, refresh_token, controller=None):
             auth_log_event("set_auth_cookies_failed", reason="cookie_controller_unavailable")
             return False
 
-        controller.set(AUTH_ACCESS_COOKIE, access_token, max_age=COOKIE_MAX_AGE, same_site="lax")
-        controller.set(AUTH_REFRESH_COOKIE, refresh_token, max_age=COOKIE_MAX_AGE, same_site="lax")
+        controller.set(AUTH_ACCESS_COOKIE, access_token, path="/", max_age=COOKIE_MAX_AGE, same_site="lax")
+        controller.set(AUTH_REFRESH_COOKIE, refresh_token, path="/", max_age=COOKIE_MAX_AGE, same_site="lax")
         auth_log_event(
             "set_auth_cookies_success",
             cookie_write_method=COOKIE_WRITE_METHOD,
@@ -171,7 +171,7 @@ def clear_auth_cookies(controller=None):
 
         for cookie_name in (AUTH_ACCESS_COOKIE, AUTH_REFRESH_COOKIE):
             try:
-                controller.remove(cookie_name)
+                controller.remove(cookie_name, path="/")
             except KeyError:
                 auth_log_event("clear_auth_cookie_missing", cookie_name=cookie_name)
 
@@ -585,6 +585,8 @@ def get_current_user():
 def show_login_form():
     if st.session_state.get("manual_logout"):
         clear_browser_session()
+
+    render_auth_debug_panel()
 
     st.markdown(
         """
